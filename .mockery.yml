@@ -1,0 +1,12 @@
+with-expecter: true
+disable-version-string: true
+dir: "."
+mockname: "Mock{{.InterfaceName}}"
+outpkg: "main"
+filename: "mock_{{.InterfaceName | snakecase}}.go"
+structname: "Mock{{.InterfaceName}}"
+packages:
+    shiftable-queue:
+        interfaces:
+            RestAPI:
+            QueueTrigger:

@@ -38,6 +38,6 @@ func runServer(cfg *Config, db *gorm.DB) {
 
 func runProcessor(cfg *Config, db *gorm.DB) {
 	log.Info().Msg("Starting queue processor...")
-	processor := NewQueueProcessor(cfg, db)
+	processor := NewQueueProcessor(cfg, db, &FakeAPI{})
 	processor.Start()
 }

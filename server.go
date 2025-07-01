@@ -19,7 +19,7 @@ func NewServer(cfg *Config, db *gorm.DB) *Server {
 
 	// Queue
 	repo := NewRepository(db)
-	processor := NewQueueProcessor(cfg, db)
+	processor := NewQueueProcessor(cfg, db, &FakeAPI{})
 	handler := NewHttpHandler(repo, processor)
 
 	r := http.NewServeMux()

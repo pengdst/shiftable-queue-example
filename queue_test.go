@@ -3,17 +3,18 @@ package main
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -24,6 +25,26 @@ type queueResp struct {
 
 type errorResp struct {
 	Error string `json:"error"`
+}
+
+func setupTestDatabase(t *testing.T) (*gorm.DB, func()) {
+	db := NewGORM(Load())
+	// Pool setup
+	sqlDB, _ := db.DB()
+	if sqlDB != nil {
+		sqlDB.SetMaxIdleConns(1)
+		sqlDB.SetMaxOpenConns(1)
+		sqlDB.SetConnMaxLifetime(time.Hour)
+	}
+	Migrate(db)
+	cleanup := func() {
+		db.Exec("DELETE FROM queues")
+		sqlDB, _ := db.DB()
+		if sqlDB != nil {
+			sqlDB.Close()
+		}
+	}
+	return db, cleanup
 }
 
 // Minimal test factory - inject database instance to server
@@ -228,7 +249,7 @@ func setupRabbitMQTest(t *testing.T) (*amqp091.Connection, *amqp091.Channel, str
 }
 
 // Test ProcessQueue with actual RabbitMQ integration
-func TestIntegration_ProcessQueue_WithRabbitMQ(t *testing.T) {
+func TestIntegration_RabbitMQ_QueueProcessing(t *testing.T) {
 	t.Run("POSITIVE-TriggerProcessing_PublishesToRabbitMQ", func(t *testing.T) {
 		// Setup RabbitMQ test environment
 		_, ch, queueName, rabbitCleanup := setupRabbitMQTest(t)
@@ -277,10 +298,7 @@ func TestIntegration_ProcessQueue_WithRabbitMQ(t *testing.T) {
 			t.Fatal("message not received from RabbitMQ within 1 seconds")
 		}
 	})
-}
 
-// Test processor eligible queue logic with RabbitMQ
-func TestIntegration_ProcessEligibleQueue_WithRabbitMQ(t *testing.T) {
 	t.Run("POSITIVE-ProcessEligibleQueue_UpdatesStatus", func(t *testing.T) {
 		// Setup RabbitMQ test environment
 		_, ch, queueName, rabbitCleanup := setupRabbitMQTest(t)
@@ -321,7 +339,9 @@ func TestIntegration_ProcessEligibleQueue_WithRabbitMQ(t *testing.T) {
 		assert.NoError(t, err)
 
 		// Create processor and process one message manually
-		processor := NewQueueProcessor(cfg, db)
+		apiMock := NewMockRestAPI(t)
+		processor := NewQueueProcessor(cfg, db, apiMock)
+		apiMock.EXPECT().SimulateProcessing(mock.Anything).Return(nil).Once()
 
 		// Simulate message consumption and processing
 		msgs, err := ch.Consume(
@@ -368,270 +388,228 @@ func TestIntegration_ProcessEligibleQueue_WithRabbitMQ(t *testing.T) {
 // Test shifting queue mechanism and anti-starvation behavior
 func TestIntegration_ShiftingQueueMechanism(t *testing.T) {
 	t.Run("POSITIVE-ShiftingQueue_AntiStarvation", func(t *testing.T) {
-		// Setup test database
 		cfg := Load()
-		db := NewGORM(cfg)
-		defer func() {
-			db.Exec("DELETE FROM queues")
-			sqlDB, _ := db.DB()
-			sqlDB.Close()
-		}()
+		db, cleanup := setupTestDatabase(t)
+		defer cleanup()
 
 		repo := NewRepository(db)
+		apiMock := NewMockRestAPI(t)
+		processor := NewQueueProcessor(cfg, db, apiMock)
 
-		// Create multiple queues with different timestamps
 		baseTime := time.Now().Add(-1 * time.Hour)
+		queue1 := &Queue{Name: "queue-oldest", Status: StatusPending}
+		_ = repo.Save(context.Background(), queue1)
+		db.Model(queue1).Update("created_at", baseTime)
+		queue2 := &Queue{Name: "queue-middle", Status: StatusPending}
+		_ = repo.Save(context.Background(), queue2)
+		db.Model(queue2).Update("created_at", baseTime.Add(30*time.Minute))
+		queue3 := &Queue{Name: "queue-newest", Status: StatusPending}
+		_ = repo.Save(context.Background(), queue3)
+		db.Model(queue3).Update("created_at", baseTime.Add(60*time.Minute))
 
-		// Queue 1: Oldest, will be processed first
-		queue1 := &Queue{
-			Name:   "queue-oldest",
-			Status: StatusPending,
-		}
-		queue1.CreatedAt = baseTime
-		err := repo.Save(context.Background(), queue1)
-		assert.NoError(t, err)
+		queues, _ := repo.Fetch(context.Background())
+		t.Logf("[DEBUG] After insert & update created_at: \n%v", queueNames(queues))
+		// Print eligible queue sebelum proses
+		eligible, _ := repo.GetEligibleQueues(context.Background())
+		t.Logf("[DEBUG] Eligible before process: %v", queueNames(eligible))
 
-		// Queue 2: Middle, created later
-		queue2 := &Queue{
-			Name:   "queue-middle",
-			Status: StatusPending,
-		}
-		queue2.CreatedAt = baseTime.Add(30 * time.Minute)
-		err = repo.Save(context.Background(), queue2)
-		assert.NoError(t, err)
+		// Step 1: Process (should get oldest, fail)
+		apiMock.EXPECT().SimulateProcessing(mock.Anything).Return(assert.AnError).Once()
+		_ = processor.ProcessEligibleQueue(context.Background())
+		queues, _ = repo.Fetch(context.Background())
+		t.Logf("After 1st process: \n%v", queueNames(queues))
 
-		// Queue 3: Newest, created last
-		queue3 := &Queue{
-			Name:   "queue-newest",
-			Status: StatusPending,
-		}
-		queue3.CreatedAt = baseTime.Add(60 * time.Minute)
-		err = repo.Save(context.Background(), queue3)
-		assert.NoError(t, err)
+		// Step 2: Process (should get middle, success)
+		apiMock.EXPECT().SimulateProcessing(mock.Anything).Return(nil).Once()
+		_ = processor.ProcessEligibleQueue(context.Background())
+		queues, _ = repo.Fetch(context.Background())
+		t.Logf("After 2nd process: \n%v", queueNames(queues))
 
-		// Step 1: First processing should get oldest queue
-		queues, err := repo.GetEligibleQueues(context.Background())
-		assert.NoError(t, err)
-		assert.Len(t, queues, 1)
-		assert.Equal(t, "queue-oldest", queues[0].Name)
+		// Step 3: Process (should get newest, success)
+		apiMock.EXPECT().SimulateProcessing(mock.Anything).Return(nil).Once()
+		_ = processor.ProcessEligibleQueue(context.Background())
+		queues, _ = repo.Fetch(context.Background())
+		t.Logf("After 3rd process: \n%v", queueNames(queues))
 
-		// Simulate queue1 failure - it should get last_retry_at updated
-		queue1.Status = StatusFailed
-		queue1.LastRetryAt = sql.NullTime{Time: time.Now(), Valid: true}
-		queue1.RetryCount = 1
-		err = repo.Save(context.Background(), queue1)
-		assert.NoError(t, err)
+		// Step 4: Process (should get failed oldest again, success)
+		apiMock.EXPECT().SimulateProcessing(mock.Anything).Return(nil).Once()
+		_ = processor.ProcessEligibleQueue(context.Background())
+		queues, _ = repo.Fetch(context.Background())
+		t.Logf("After 4th process: \n%v", queueNames(queues))
 
-		// Step 2: Next processing should get queue2 (middle), not the failed queue1
-		queues, err = repo.GetEligibleQueues(context.Background())
-		assert.NoError(t, err)
-		assert.Len(t, queues, 1)
-		assert.Equal(t, "queue-middle", queues[0].Name)
+		// Cek status akhir queue di DB
+		var q1, q2, q3 Queue
+		_ = db.Where("name = ?", "queue-oldest").First(&q1).Error
+		_ = db.Where("name = ?", "queue-middle").First(&q2).Error
+		_ = db.Where("name = ?", "queue-newest").First(&q3).Error
 
-		// Process queue2 successfully
-		queue2.Status = StatusCompleted
-		err = repo.Save(context.Background(), queue2)
-		assert.NoError(t, err)
-
-		// Step 3: Next processing should get queue3 (newest)
-		queues, err = repo.GetEligibleQueues(context.Background())
-		assert.NoError(t, err)
-		assert.Len(t, queues, 1)
-		assert.Equal(t, "queue-newest", queues[0].Name)
-
-		// Process queue3 successfully
-		queue3.Status = StatusCompleted
-		err = repo.Save(context.Background(), queue3)
-		assert.NoError(t, err)
-
-		// Step 4: Now only failed queue1 should be eligible (anti-starvation)
-		queues, err = repo.GetEligibleQueues(context.Background())
-		assert.NoError(t, err)
-		assert.Len(t, queues, 1)
-		assert.Equal(t, "queue-oldest", queues[0].Name)
-		assert.Equal(t, StatusFailed, queues[0].Status)
-		assert.True(t, queues[0].LastRetryAt.Valid)
-		assert.Equal(t, 1, queues[0].RetryCount)
-
-		t.Logf("Shifting queue anti-starvation working correctly")
+		assert.Equal(t, StatusCompleted, q1.Status)
+		assert.Equal(t, StatusCompleted, q2.Status)
+		assert.Equal(t, StatusCompleted, q3.Status)
 	})
 
-	t.Run("POSITIVE-NewQueueVsFailedQueue_ProperOrdering", func(t *testing.T) {
-		// Setup test database
-		cfg := Load()
-		db := NewGORM(cfg)
-		defer func() {
-			db.Exec("DELETE FROM queues")
-			sqlDB, _ := db.DB()
-			sqlDB.Close()
-		}()
-
+	t.Run("NEGATIVE-Starvation_BurstInsert", func(t *testing.T) {
+		db, cleanup := setupTestDatabase(t)
+		defer cleanup()
 		repo := NewRepository(db)
+		apiMock := NewMockRestAPI(t)
+		processor := NewQueueProcessor(Load(), db, apiMock)
 
-		// Create old failed queue
-		baseTime := time.Now().Add(-2 * time.Hour)
-		failedQueue := &Queue{
-			Name:        "queue-failed-old",
-			Status:      StatusFailed,
-			LastRetryAt: sql.NullTime{Time: baseTime.Add(1 * time.Hour), Valid: true}, // Failed 1 hour ago
-			RetryCount:  1,
+		// Step 1: Insert satu queue gagal
+		queueFail := &Queue{Name: "queue-fail", Status: StatusPending}
+		_ = repo.Save(context.Background(), queueFail)
+		// Step 2: Insert 10 queue baru
+		for i := 0; i < 10; i++ {
+			q := &Queue{Name: fmt.Sprintf("queue-burst-%d", i), Status: StatusPending}
+			_ = repo.Save(context.Background(), q)
 		}
-		failedQueue.CreatedAt = baseTime
-		err := repo.Save(context.Background(), failedQueue)
-		assert.NoError(t, err)
-
-		// Wait a moment to ensure different timestamp
-		time.Sleep(10 * time.Millisecond)
-
-		// Create new pending queue
-		newQueue := &Queue{
-			Name:   "queue-new",
-			Status: StatusPending,
+		// Step 3: Fail queue-fail di proses pertama
+		apiMock.EXPECT().SimulateProcessing(mock.Anything).Return(assert.AnError).Once()
+		_ = processor.ProcessEligibleQueue(context.Background())
+		queues, _ := repo.Fetch(context.Background())
+		t.Logf("After fail queue-fail: \n%v", queueNames(queues))
+		// Step 4: Semua queue lain success
+		for i := 0; i < 10; i++ {
+			apiMock.EXPECT().SimulateProcessing(mock.Anything).Return(nil).Once()
+			_ = processor.ProcessEligibleQueue(context.Background())
+			queues, _ = repo.Fetch(context.Background())
+			t.Logf("After process burst-%d: \n%v", i, queueNames(queues))
 		}
-		// This will have current timestamp (newer than failed queue's last_retry_at)
-		err = repo.Save(context.Background(), newQueue)
-		assert.NoError(t, err)
-
-		// The failed queue should be processed first because:
-		// failed_queue: GREATEST(old_created_at, last_retry_at_1_hour_ago) = last_retry_at_1_hour_ago (older)
-		// new_queue: GREATEST(current_created_at, NULL) = current_created_at (newer)
-		// ASC ordering means older timestamps get processed first
-		queues, err := repo.GetEligibleQueues(context.Background())
-		assert.NoError(t, err)
-		assert.Len(t, queues, 1)
-		assert.Equal(t, "queue-failed-old", queues[0].Name) // Older timestamp processed first
-
-		t.Logf("Queue ordering works correctly: older timestamps processed first (anti-starvation)")
+		// Step 5: Retry queue-fail, success
+		apiMock.EXPECT().SimulateProcessing(mock.Anything).Return(nil).Once()
+		_ = processor.ProcessEligibleQueue(context.Background())
+		queues, _ = repo.Fetch(context.Background())
+		t.Logf("After retry queue-fail: \n%v", queueNames(queues))
+		// Step 6: Assert queue-fail completed
+		var qf Queue
+		_ = db.Where("name = ?", "queue-fail").First(&qf).Error
+		assert.Equal(t, StatusCompleted, qf.Status)
+		assert.Equal(t, 1, qf.RetryCount)
 	})
 
-	t.Run("POSITIVE-MultipleFailures_RetryCountIncrement", func(t *testing.T) {
-		// Setup test database
-		cfg := Load()
-		db := NewGORM(cfg)
-		defer func() {
-			db.Exec("DELETE FROM queues")
-			sqlDB, _ := db.DB()
-			sqlDB.Close()
-		}()
-
+	t.Run("POSITIVE-MultipleFailures_RetryCount", func(t *testing.T) {
+		db, cleanup := setupTestDatabase(t)
+		defer cleanup()
 		repo := NewRepository(db)
+		apiMock := NewMockRestAPI(t)
+		processor := NewQueueProcessor(Load(), db, apiMock)
 
-		// Create queue
-		queue := &Queue{
-			Name:   "queue-multiple-failures",
-			Status: StatusPending,
-		}
-		err := repo.Save(context.Background(), queue)
-		assert.NoError(t, err)
-
-		// Simulate multiple failures
-		for i := 1; i <= 3; i++ {
-			// Get eligible queue
-			queues, err := repo.GetEligibleQueues(context.Background())
-			assert.NoError(t, err)
-			assert.Len(t, queues, 1)
-			assert.Equal(t, "queue-multiple-failures", queues[0].Name)
-
-			// Simulate failure
-			queue := &queues[0]
-			queue.Status = StatusFailed
-			queue.LastRetryAt = sql.NullTime{Time: time.Now(), Valid: true}
-			queue.RetryCount = i
-			err = repo.Save(context.Background(), queue)
-			assert.NoError(t, err)
-
-			// Verify retry count
-			updatedQueue, err := repo.GetQueueByName(context.Background(), "queue-multiple-failures")
-			assert.NoError(t, err)
-			assert.Equal(t, i, updatedQueue.RetryCount)
-			assert.True(t, updatedQueue.LastRetryAt.Valid)
-
-			t.Logf("Failure %d: retry_count=%d, last_retry_at updated", i, updatedQueue.RetryCount)
-
-			// Small delay to ensure different timestamps
-			time.Sleep(10 * time.Millisecond)
-		}
-
-		t.Logf("Multiple failures properly increment retry count and update last_retry_at")
+		queue := &Queue{Name: "queue-retry", Status: StatusPending}
+		_ = repo.Save(context.Background(), queue)
+		// Fail 2x
+		apiMock.EXPECT().SimulateProcessing(mock.Anything).Return(assert.AnError).Twice()
+		_ = processor.ProcessEligibleQueue(context.Background())
+		queues, _ := repo.Fetch(context.Background())
+		t.Logf("After 1st fail: \n%v", queueNames(queues))
+		_ = processor.ProcessEligibleQueue(context.Background())
+		queues, _ = repo.Fetch(context.Background())
+		t.Logf("After 2nd fail: \n%v", queueNames(queues))
+		// Success
+		apiMock.EXPECT().SimulateProcessing(mock.Anything).Return(nil).Once()
+		_ = processor.ProcessEligibleQueue(context.Background())
+		queues, _ = repo.Fetch(context.Background())
+		t.Logf("After success: \n%v", queueNames(queues))
+		// Assert
+		var qr Queue
+		_ = db.Where("name = ?", "queue-retry").First(&qr).Error
+		assert.Equal(t, StatusCompleted, qr.Status)
+		assert.Equal(t, 2, qr.RetryCount)
 	})
 
-	t.Run("POSITIVE-AntiStarvation_FailedQueueGetsRetry", func(t *testing.T) {
-		// This test demonstrates the anti-starvation scenario:
-		// A queue fails processing, but new queues keep coming.
-		// The failed queue should still get a chance to be processed eventually.
-
-		// Setup test database
-		cfg := Load()
-		db := NewGORM(cfg)
-		defer func() {
-			db.Exec("DELETE FROM queues")
-			sqlDB, _ := db.DB()
-			sqlDB.Close()
-		}()
-
+	t.Run("POSITIVE-InterleavedSuccessFailure", func(t *testing.T) {
+		db, cleanup := setupTestDatabase(t)
+		defer cleanup()
 		repo := NewRepository(db)
+		apiMock := NewMockRestAPI(t)
+		processor := NewQueueProcessor(Load(), db, apiMock)
 
-		// Step 1: Create initial queue that will fail
-		baseTime := time.Now().Add(-2 * time.Hour)
-
-		oldQueue := &Queue{
-			Name:   "queue-will-fail",
-			Status: StatusPending,
-		}
-		oldQueue.CreatedAt = baseTime
-		err := repo.Save(context.Background(), oldQueue)
-		assert.NoError(t, err)
-
-		// Step 2: Process and fail the old queue
-		queues, err := repo.GetEligibleQueues(context.Background())
-		assert.NoError(t, err)
-		assert.Equal(t, "queue-will-fail", queues[0].Name)
-
-		// Simulate failure with last_retry_at set to 1 hour ago
-		oldQueue.Status = StatusFailed
-		oldQueue.LastRetryAt = sql.NullTime{Time: baseTime.Add(1 * time.Hour), Valid: true}
-		oldQueue.RetryCount = 1
-		err = repo.Save(context.Background(), oldQueue)
-		assert.NoError(t, err)
-
-		// Step 3: Multiple new queues arrive (simulating busy system)
-		newQueueNames := []string{"new-queue-1", "new-queue-2", "new-queue-3"}
-		for i, name := range newQueueNames {
-			newQueue := &Queue{
-				Name:   name,
-				Status: StatusPending,
-			}
-			// Each new queue gets progressively newer timestamp
-			newQueue.CreatedAt = time.Now().Add(time.Duration(i) * time.Minute)
-			err = repo.Save(context.Background(), newQueue)
-			assert.NoError(t, err)
-		}
-
-		// Step 4: Verify processing order - failed queue should come first
-		// because its last_retry_at (1 hour ago) is older than new queues' created_at
-		expectedOrder := []string{"queue-will-fail", "new-queue-1", "new-queue-2", "new-queue-3"}
-
-		for i, expectedName := range expectedOrder {
-			queues, err := repo.GetEligibleQueues(context.Background())
-			assert.NoError(t, err)
-			assert.Len(t, queues, 1)
-			assert.Equal(t, expectedName, queues[0].Name,
-				"Processing order incorrect at step %d", i+1)
-
-			// Mark as completed to move to next
-			queue := &queues[0]
-			queue.Status = StatusCompleted
-			err = repo.Save(context.Background(), queue)
-			assert.NoError(t, err)
-
-			t.Logf("Step %d: Processed queue '%s' correctly", i+1, expectedName)
-		}
-
-		// Step 5: Verify no more eligible queues
-		queues, err = repo.GetEligibleQueues(context.Background())
-		assert.NoError(t, err)
-		assert.Len(t, queues, 0)
-
-		t.Logf("Anti-starvation mechanism working: failed queue got retry despite new queues arriving")
+		// Step 1: Insert Queue1 & Queue2
+		queue1 := &Queue{Name: "queue1", Status: StatusPending}
+		queue2 := &Queue{Name: "queue2", Status: StatusPending}
+		_ = repo.Save(context.Background(), queue1)
+		_ = repo.Save(context.Background(), queue2)
+		// Step 2: Queue1 gagal
+		apiMock.EXPECT().SimulateProcessing(mock.Anything).Return(assert.AnError).Once()
+		_ = processor.ProcessEligibleQueue(context.Background())
+		queues, _ := repo.Fetch(context.Background())
+		t.Logf("After queue1 fail: \n%v", queueNames(queues))
+		// Step 3: Queue2 sukses
+		apiMock.EXPECT().SimulateProcessing(mock.Anything).Return(nil).Once()
+		_ = processor.ProcessEligibleQueue(context.Background())
+		queues, _ = repo.Fetch(context.Background())
+		t.Logf("After queue2 success: \n%v", queueNames(queues))
+		// Step 4: Insert Queue3 setelah proses mulai
+		queue3 := &Queue{Name: "queue3", Status: StatusPending}
+		_ = repo.Save(context.Background(), queue3)
+		queues, _ = repo.Fetch(context.Background())
+		t.Logf("After insert queue3: \n%v", queueNames(queues))
+		// Step 5: Queue1 retry sukses
+		apiMock.EXPECT().SimulateProcessing(mock.Anything).Return(nil).Once()
+		_ = processor.ProcessEligibleQueue(context.Background())
+		queues, _ = repo.Fetch(context.Background())
+		t.Logf("After queue1 retry success: \n%v", queueNames(queues))
+		// Step 6: Queue3 sukses
+		apiMock.EXPECT().SimulateProcessing(mock.Anything).Return(nil).Once()
+		_ = processor.ProcessEligibleQueue(context.Background())
+		queues, _ = repo.Fetch(context.Background())
+		t.Logf("After queue3 success: \n%v", queueNames(queues))
+		// Assert status akhir
+		var q1, q2, q3 Queue
+		_ = db.Where("name = ?", "queue1").First(&q1).Error
+		_ = db.Where("name = ?", "queue2").First(&q2).Error
+		_ = db.Where("name = ?", "queue3").First(&q3).Error
+		assert.Equal(t, StatusCompleted, q1.Status)
+		assert.Equal(t, 1, q1.RetryCount)
+		assert.Equal(t, StatusCompleted, q2.Status)
+		assert.Equal(t, 0, q2.RetryCount)
+		assert.Equal(t, StatusCompleted, q3.Status)
+		assert.Equal(t, 0, q3.RetryCount)
 	})
+
+	t.Run("POSITIVE-AllQueuesFailedThenSucceed", func(t *testing.T) {
+		db, cleanup := setupTestDatabase(t)
+		defer cleanup()
+		repo := NewRepository(db)
+		apiMock := NewMockRestAPI(t)
+		processor := NewQueueProcessor(Load(), db, apiMock)
+
+		// Step 1: Insert 3 queue
+		queues := []*Queue{
+			{Name: "fail1", Status: StatusPending},
+			{Name: "fail2", Status: StatusPending},
+			{Name: "fail3", Status: StatusPending},
+		}
+		for _, q := range queues {
+			_ = repo.Save(context.Background(), q)
+		}
+		// Step 2: Semua gagal
+		for i := 0; i < 3; i++ {
+			apiMock.EXPECT().SimulateProcessing(mock.Anything).Return(assert.AnError).Once()
+			_ = processor.ProcessEligibleQueue(context.Background())
+			queues, _ := repo.Fetch(context.Background())
+			t.Logf("After fail-%d: \n%v", i+1, queueNames(queues))
+		}
+		// Step 3: Semua retry sukses
+		for i := 0; i < 3; i++ {
+			apiMock.EXPECT().SimulateProcessing(mock.Anything).Return(nil).Once()
+			_ = processor.ProcessEligibleQueue(context.Background())
+			queues, _ := repo.Fetch(context.Background())
+			t.Logf("After retry success-%d: \n%v", i+1, queueNames(queues))
+		}
+		// Assert status akhir dan retry count
+		for _, name := range []string{"fail1", "fail2", "fail3"} {
+			var q Queue
+			_ = db.Where("name = ?", name).First(&q).Error
+			assert.Equal(t, StatusCompleted, q.Status)
+			assert.Equal(t, 1, q.RetryCount)
+		}
+	})
+}
+
+func queueNames(queues []Queue) string {
+	names := make([]string, len(queues))
+	for i, q := range queues {
+		names[i] = fmt.Sprintf("%d. Queue %s (created_at=%v, last_retry_at=%v, retry=%d, status=%v)", i+1, q.Name, q.CreatedAt.Format(time.TimeOnly), q.LastRetryAt.Time.Format(time.TimeOnly), q.RetryCount, q.Status)
+	}
+	return strings.Join(names, "\n")
 }

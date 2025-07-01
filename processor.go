@@ -4,7 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"math/rand"
+	"errors"
+	"math/rand/v2"
 	"time"
 
 	"github.com/rabbitmq/amqp091-go"
@@ -12,13 +13,18 @@ import (
 	"gorm.io/gorm"
 )
 
+type RestAPI interface {
+	SimulateProcessing(*Queue) error
+}
+
 type QueueProcessor struct {
 	repo    *Repository
 	conn    *amqp091.Connection
 	channel *amqp091.Channel
+	api     RestAPI
 }
 
-func NewQueueProcessor(cfg *Config, db *gorm.DB) *QueueProcessor {
+func NewQueueProcessor(cfg *Config, db *gorm.DB, api RestAPI) *QueueProcessor {
 	// Connect to RabbitMQ
 	conn, err := amqp091.Dial(cfg.RabbitMQURL)
 	if err != nil {
@@ -47,6 +53,7 @@ func NewQueueProcessor(cfg *Config, db *gorm.DB) *QueueProcessor {
 		repo:    NewRepository(db),
 		conn:    conn,
 		channel: channel,
+		api:     api,
 	}
 }
 
@@ -128,16 +135,19 @@ func (p *QueueProcessor) ProcessEligibleQueue(ctx context.Context) error {
 	log.Info().Msgf("processing queue %s (ID: %d)", queue.Name, queue.ID)
 
 	// Simulate actual processing logic
-	success := p.simulateProcessing()
-
-	if success {
-		queue.Status = StatusCompleted
-	} else {
+	if err := p.api.SimulateProcessing(queue); err != nil {
+		log.Warn().Msgf("queue %s (ID: %d) failed, retry count: %d", queue.Name, queue.ID, queue.RetryCount)
 		queue.Status = StatusFailed
 		queue.LastRetryAt = sql.NullTime{Time: time.Now(), Valid: true}
 		queue.RetryCount++
-		log.Warn().Msgf("queue %s (ID: %d) failed, retry count: %d", queue.Name, queue.ID, queue.RetryCount)
+
+		if err := p.repo.Save(ctx, queue); err != nil {
+			log.Error().Msgf("failed to update queue %s: %s", queue.Name, err.Error())
+			return err
+		}
+		return err
 	}
+	queue.Status = StatusCompleted
 
 	// Update queue status in database
 	if err := p.repo.Save(ctx, queue); err != nil {
@@ -186,8 +196,12 @@ func (p *QueueProcessor) triggerNextProcessing(ctx context.Context) error {
 	)
 }
 
-// simulateProcessing simulates random success/failure for demo purposes
-func (p *QueueProcessor) simulateProcessing() bool {
-	// 70% success rate
-	return rand.Float32() < 0.7
+type FakeAPI struct{}
+
+// SimulateProcessing simulates random success/failure for demo purposes
+func (p *FakeAPI) SimulateProcessing(*Queue) error {
+	if rand.Float32() < 0.7 {
+		return nil
+	}
+	return errors.New("processing failed")
 }
