@@ -17,12 +17,13 @@ func Load() *Config {
 }
 
 type Config struct {
-	Host     string `env:"DATABASE_HOST,notEmpty"`
-	Port     int    `env:"DATABASE_PORT,notEmpty"`
-	User     string `env:"DATABASE_USER,notEmpty"`
-	Password string `env:"DATABASE_PASSWORD,notEmpty"`
-	Name     string `env:"DATABASE_NAME,notEmpty"`
-	LogLevel string `env:"DATABASE_LOG_LEVEL" envDefault:"info"`
+	Host        string `env:"DATABASE_HOST,notEmpty"`
+	Port        int    `env:"DATABASE_PORT,notEmpty"`
+	User        string `env:"DATABASE_USER,notEmpty"`
+	Password    string `env:"DATABASE_PASSWORD,notEmpty"`
+	Name        string `env:"DATABASE_NAME,notEmpty"`
+	RabbitMQURL string `env:"RABBITMQ_URL,notEmpty"`
+	LogLevel    string `env:"DATABASE_LOG_LEVEL" envDefault:"info"`
 }
 
 func (c Config) DataSourceName() string {

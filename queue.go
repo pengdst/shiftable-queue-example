@@ -1,15 +1,24 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
 
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
+
+const (
+	TriggerStartProcessing = "start_processing"
+	TriggerProcessNext     = "process_next"
+)
+
+type QueueTrigger interface {
+	TriggerProcessing(ctx context.Context) error
+}
 
 type QueueStatus int
 
@@ -54,12 +63,14 @@ func NewService(repo *Repository) *Service {
 }
 
 type httpHandler struct {
-	repo *Repository
+	repo      *Repository
+	processor QueueTrigger
 }
 
-func NewHttpHandler(repo *Repository) *httpHandler {
+func NewHttpHandler(repo *Repository, processor QueueTrigger) *httpHandler {
 	return &httpHandler{
-		repo: repo,
+		repo:      repo,
+		processor: processor,
 	}
 }
 
@@ -129,46 +140,33 @@ func (h *httpHandler) ProcessQueue(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Ctx(ctx).Error().Msgf("failed to decode request: %s", err.Error())
+		log.Ctx(ctx).Error().Msgf("failed to decode request body: %s", err.Error())
 		WriteJSONError(w, err)
 		return
 	}
-
-	if req.Name == "" {
-		WriteJSONError(w, fmt.Errorf("queue name is required"))
-		return
-	}
-
-	// Get queue by name
 	queue, err := h.repo.GetQueueByName(ctx, req.Name)
 	if err != nil {
-		log.Ctx(ctx).Error().Msgf("failed to get queue by name %s: %s", req.Name, err.Error())
+		log.Ctx(ctx).Error().Msgf("failed to get queue: %s", err.Error())
 		WriteJSONError(w, err)
 		return
 	}
-
-	// Check if queue is eligible for processing (pending or failed)
-	if queue.Status != StatusPending && queue.Status != StatusFailed {
-		WriteJSONError(w, fmt.Errorf("queue %s is not eligible for processing, current status: %s", req.Name, queue.Status.String()))
-		return
-	}
-
-	// Update status to processing
 	queue.Status = StatusProcessing
-	if err := h.repo.Save(ctx, queue); err != nil {
-		log.Ctx(ctx).Error().Msgf("failed to update queue %s status: %s", req.Name, err.Error())
+	err = h.repo.Save(ctx, queue)
+	if err != nil {
+		log.Ctx(ctx).Error().Msgf("failed to save queue: %s", err.Error())
 		WriteJSONError(w, err)
 		return
 	}
 
-	// TODO: Trigger RabbitMQ to process this queue
-	// publishToRabbitMQ(queue)
-	log.Ctx(ctx).Info().Msgf("queue %s triggered for processing", req.Name)
+	// Trigger processing via processor
+	if err := h.processor.TriggerProcessing(ctx); err != nil {
+		log.Ctx(ctx).Error().Msgf("failed to trigger processing: %s", err.Error())
+		WriteJSONError(w, err)
+		return
+	}
 
 	WriteJSON(w, http.StatusOK, map[string]any{
-		"message": "queue triggered for processing",
-		"name":    req.Name,
-		"status":  queue.Status.String(),
+		"message": "queue processing triggered",
 	})
 }
 

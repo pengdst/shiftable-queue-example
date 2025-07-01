@@ -42,3 +42,37 @@ func (r *Repository) DeleteByID(ctx context.Context, id int) error {
 
 	return r.db.WithContext(ctx).Delete(&Queue{}, id).Error
 }
+
+func (r *Repository) GetQueueByName(ctx context.Context, name string) (*Queue, error) {
+	var queues Queue
+
+	// Get queues that are pending or failed (eligible for processing)
+	// Order by shifting queue logic: GREATEST(created_at, COALESCE(last_retry_at, created_at))
+	err := r.db.WithContext(ctx).
+		Where("name", name).
+		First(&queues).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &queues, nil
+}
+
+func (r *Repository) GetEligibleQueues(ctx context.Context) ([]Queue, error) {
+	var queues []Queue
+
+	// Get queues that are pending or failed (eligible for processing)
+	// Order by shifting queue logic: GREATEST(created_at, COALESCE(last_retry_at, created_at))
+	err := r.db.WithContext(ctx).
+		Where("status IN ?", []QueueStatus{StatusPending, StatusFailed}).
+		Order("GREATEST(created_at, COALESCE(last_retry_at, created_at)) ASC").
+		Limit(1).
+		Find(&queues).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	return queues, nil
+}

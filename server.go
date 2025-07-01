@@ -14,12 +14,13 @@ import (
 	"gorm.io/gorm"
 )
 
-func NewServer(db *gorm.DB) *Server {
+func NewServer(cfg *Config, db *gorm.DB) *Server {
 	Migrate(db)
 
 	// Queue
 	repo := NewRepository(db)
-	handler := NewHttpHandler(repo)
+	processor := NewQueueProcessor(cfg, db)
+	handler := NewHttpHandler(repo, processor)
 
 	r := http.NewServeMux()
 	r.HandleFunc("GET /", rootHandler)
