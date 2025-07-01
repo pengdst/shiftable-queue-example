@@ -23,10 +23,6 @@ type queueResp struct {
 	Data []Queue `json:"data"`
 }
 
-type errorResp struct {
-	Error string `json:"error"`
-}
-
 func setupTestDatabase(t *testing.T) (*gorm.DB, func()) {
 	db := NewGORM(Load())
 	// Pool setup

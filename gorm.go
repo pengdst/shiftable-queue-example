@@ -96,6 +96,4 @@ func (l Logger) Trace(ctx context.Context, begin time.Time, f func() (string, in
 		Int64("rows", rows).
 		Float64("latency", float64(time.Since(begin).Nanoseconds()/1e4)/100.0).
 		Msg("database query")
-
-	return
 }

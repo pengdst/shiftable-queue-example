@@ -45,7 +45,7 @@ clean:
 
 # Run the application
 run:
-	go run .
+	go run . -cmd=$(if $(cmd),$(cmd),server)
 
 # Install dependencies
 deps:
