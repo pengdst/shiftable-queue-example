@@ -72,7 +72,7 @@ func (p *QueueProcessor) Start() {
 	for d := range msgs {
 		ctx := context.Background()
 
-		if err := p.processEligibleQueue(ctx); err != nil {
+		if err := p.ProcessEligibleQueue(ctx); err != nil {
 			log.Error().Msgf("failed to process eligible queue: %s", err.Error())
 			d.Nack(false, true) // requeue
 		} else {
@@ -111,7 +111,7 @@ func (p *QueueProcessor) TriggerProcessing(ctx context.Context) error {
 	)
 }
 
-func (p *QueueProcessor) processEligibleQueue(ctx context.Context) error {
+func (p *QueueProcessor) ProcessEligibleQueue(ctx context.Context) error {
 	// Get next eligible queue (1 queue only, ordered by shifting logic)
 	queues, err := p.repo.GetEligibleQueues(ctx)
 	if err != nil {
