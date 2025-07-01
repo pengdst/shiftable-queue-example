@@ -147,6 +147,39 @@ func TestIntegration_DeleteQueueByID(t *testing.T) {
 	assert.Empty(t, verifyQl.Data)
 }
 
+func TestIntegration_LeaveQueue(t *testing.T) {
+	ts, cleanup := setupTestServer()
+	defer cleanup()
+	client := ts.Client()
+
+	// Create a queue
+	createBody := []byte(`{"name": "leave-queue"}`)
+	resp, err := client.Post(ts.URL+"/api/v1/queues", "application/json", bytes.NewReader(createBody))
+	assert.NoError(t, err)
+	resp.Body.Close()
+
+	// Leave (delete) the queue by name
+	leaveBody := []byte(`{"name": "leave-queue"}`)
+	resp, err = client.Post(ts.URL+"/api/v1/queues/leave", "application/json", bytes.NewReader(leaveBody))
+	assert.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// Verify: queue should be deleted
+	verifyResp, _ := client.Get(ts.URL + "/api/v1/queues")
+	var verifyQl queueResp
+	json.NewDecoder(verifyResp.Body).Decode(&verifyQl)
+	verifyResp.Body.Close()
+	assert.Empty(t, verifyQl.Data)
+
+	// Try to leave a non-existent queue
+	leaveBody = []byte(`{"name": "not-exist"}`)
+	resp, err = client.Post(ts.URL+"/api/v1/queues/leave", "application/json", bytes.NewReader(leaveBody))
+	assert.NoError(t, err)
+	defer resp.Body.Close()
+	assert.NotEqual(t, http.StatusOK, resp.StatusCode)
+}
+
 // Test CreateQueue error handling - primary error path
 func TestIntegration_CreateQueue_InvalidJSON(t *testing.T) {
 	ts, cleanup := setupTestServer()

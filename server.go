@@ -28,6 +28,7 @@ func NewServer(cfg *Config, db *gorm.DB) *Server {
 	r.HandleFunc("GET /api/v1/queues", handler.GetQueueList)
 	r.HandleFunc("DELETE /api/v1/queues/{id}", handler.DeleteQueueByID)
 	r.HandleFunc("POST /api/v1/queues/process", handler.ProcessQueue)
+	r.HandleFunc("POST /api/v1/queues/leave", handler.LeaveQueue)
 
 	return &Server{router: r}
 }

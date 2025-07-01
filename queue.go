@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -167,6 +168,37 @@ func (h *httpHandler) ProcessQueue(w http.ResponseWriter, r *http.Request) {
 
 	WriteJSON(w, http.StatusOK, map[string]any{
 		"message": "queue processing triggered",
+	})
+}
+
+func (h *httpHandler) LeaveQueue(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Ctx(ctx).Error().Msgf("failed to decode request body: %s", err.Error())
+		WriteJSONError(w, err)
+		return
+	}
+
+	err := h.repo.DeleteByName(ctx, req.Name)
+	if err != nil {
+		log.Ctx(ctx).Error().Msgf("failed to save queue: %s", err.Error())
+		WriteJSONError(w, err)
+		return
+	}
+
+	// Trigger processing via processor
+	if err := h.processor.TriggerProcessing(ctx); err != nil {
+		log.Ctx(ctx).Error().Msgf("failed to trigger processing: %s", err.Error())
+		WriteJSONError(w, err)
+		return
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]any{
+		"message": fmt.Sprintf("queue %s deleted", req.Name),
 	})
 }
 

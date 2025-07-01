@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 
 	"gorm.io/gorm"
 )
@@ -41,6 +42,19 @@ func (r *Repository) DeleteByID(ctx context.Context, id int) error {
 	}
 
 	return r.db.WithContext(ctx).Delete(&Queue{}, id).Error
+}
+
+func (r *Repository) DeleteByName(ctx context.Context, name string) error {
+	result := r.db.WithContext(ctx).Delete(&Queue{}, "name LIKE ?", name)
+	if result.Error != nil {
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		return errors.New("queue not found")
+	}
+
+	return nil
 }
 
 func (r *Repository) GetQueueByName(ctx context.Context, name string) (*Queue, error) {
