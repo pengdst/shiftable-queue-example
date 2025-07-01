@@ -19,9 +19,9 @@ func main() {
 	db := NewGORM(cfg)
 
 	switch command {
-	case "server":
+	case "api":
 		runServer(cfg, db)
-	case "processor":
+	case "queue":
 		runProcessor(cfg, db)
 	default:
 		fmt.Printf("Unknown command: %s\n", command)

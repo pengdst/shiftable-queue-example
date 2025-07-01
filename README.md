@@ -30,6 +30,11 @@ This repository is a **sample project** demonstrating a robust queue processing 
    ```sh
    make test
    ```
+4. **Run the app:**
+   ```sh
+   make run cmd=api
+   make run cmd=queue
+   ```
 
 **Happy queueing!**
 
@@ -43,6 +48,47 @@ This repository is a **sample project** demonstrating a robust queue processing 
 - **Simulation via Integration Test:**
   - The shifting and anti-starvation logic is simulated and validated using integration tests.
   - **Note:** You must use a local database (e.g., Postgres) for integration tests. In-memory DB (SQLite) is not reliable for this shifting logic (SQLite in-memory is just broken for this use case—don't even bother, it'll drive you nuts). Just use Postgres or another real database.
+
+## API Endpoints
+
+### Create Queue
+- **POST** `/api/v1/queues`
+- **Request Body:**
+  ```json
+  { "name": "queue-name" }
+  ```
+- **Response:**
+  - `201 Created` on success
+
+### List Queues
+- **GET** `/api/v1/queues`
+- **Response:**
+  ```json
+  { "data": [ { "id": 1, "name": "queue-name", ... } ] }
+  ```
+
+### Delete Queue by ID
+- **DELETE** `/api/v1/queues/{id}`
+- **Response:**
+  - `200 OK` on success
+
+### Leave Queue (Delete by Name)
+- **POST** `/api/v1/queues/leave`
+- **Request Body:**
+  ```json
+  { "name": "queue-name" }
+  ```
+- **Response:**
+  - `200 OK` with message on success
+    ```json
+    { "message": "queue queue-name deleted" }
+    ```
+  - `500 Internal Server Error` if queue not found or error
+    ```json
+    { "error": "record not found" }
+    ```
+
+---
 
 ## Example: Shifting & Anti-Starvation
 
