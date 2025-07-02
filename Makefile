@@ -28,9 +28,9 @@ test:
 	go tool cover -html=coverage.out -o coverage.html
 
 # Generate mocks using mockery
-mock:
+mock: tidy
 	@echo "Generating mocks..."
-	mockery
+	go tool mockery
 	@echo "Mocks generated successfully"
 
 # Alias for mock generation
