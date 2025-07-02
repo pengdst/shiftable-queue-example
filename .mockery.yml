@@ -1,14 +1,17 @@
-with-expecter: true
-disable-version-string: true
-dir: "."
-mockname: "Mock{{.InterfaceName}}"
-outpkg: "main"
-filename: "mock_{{.InterfaceName | snakecase}}.go"
-structname: "Mock{{.InterfaceName}}"
+all: false
+dir: '{{.InterfaceDir}}'
+filename: mocks_test.go
+force-file-write: true
+formatter: goimports
+include-auto-generated: false
+log-level: info
+structname: '{{.Mock}}{{.InterfaceName}}'
+pkgname: '{{.SrcPackageName}}'
+recursive: false
+require-template-schema-exists: true
+template: testify
+template-schema: '{{.Template}}.schema.json'
 packages:
-    shiftable-queue:
-        interfaces:
-            RestAPI:
-            QueueTrigger:
-            Publisher:
-            Closer:
+  shiftable-queue:
+    config:
+      all: true
