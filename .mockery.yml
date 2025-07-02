@@ -10,3 +10,5 @@ packages:
         interfaces:
             RestAPI:
             QueueTrigger:
+            Publisher:
+            Closer:

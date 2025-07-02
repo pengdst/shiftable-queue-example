@@ -17,10 +17,20 @@ type RestAPI interface {
 	SimulateProcessing(*Queue) error
 }
 
+type Publisher interface {
+	PublishWithContext(ctx context.Context, exchange, key string, mandatory, immediate bool, msg amqp091.Publishing) error
+	Consume(queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args amqp091.Table) (<-chan amqp091.Delivery, error)
+	Close() error
+}
+
+type Closer interface {
+	Close() error
+}
+
 type QueueProcessor struct {
 	repo    *Repository
-	conn    *amqp091.Connection
-	channel *amqp091.Channel
+	conn    Closer
+	channel Publisher
 	api     RestAPI
 }
 
