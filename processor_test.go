@@ -13,27 +13,26 @@ import (
 )
 
 // Helper untuk setup processor test
-func setupProcessorTest(t *testing.T) (*QueueProcessor, *MockPublisher, *MockRestAPI, *gorm.DB, func()) {
+func setupProcessorTest(t *testing.T) (*QueueProcessor, *MockPublisher, *MockCloser, *MockRestAPI, *gorm.DB, func()) {
 	db, dbCleanup := setupTestDatabase(t)
-	mq, _, _, mqCleanup := setupRabbitMQTest(t)
+	mockCloser := NewMockCloser(t)
 	mockPublisher := NewMockPublisher(t)
 	mockAPI := NewMockRestAPI(t)
 	processor := &QueueProcessor{
 		repo:    NewRepository(db),
-		conn:    mq,
+		conn:    mockCloser,
 		channel: mockPublisher,
 		api:     mockAPI,
 	}
 	cleanup := func() {
 		dbCleanup()
-		mqCleanup()
 	}
-	return processor, mockPublisher, mockAPI, db, cleanup
+	return processor, mockPublisher, mockCloser, mockAPI, db, cleanup
 }
 
 func TestQueueProcessor_ProcessEligibleQueue(t *testing.T) {
 	t.Run("POSITIVE-Success", func(t *testing.T) {
-		processor, _, mockAPI, db, cleanup := setupProcessorTest(t)
+		processor, _, _, mockAPI, db, cleanup := setupProcessorTest(t)
 		defer cleanup()
 		repo := NewRepository(db)
 		queue := &Queue{Name: "q-success", Status: StatusPending}
@@ -52,7 +51,7 @@ func TestQueueProcessor_ProcessEligibleQueue(t *testing.T) {
 	})
 
 	t.Run("NEGATIVE-Failure", func(t *testing.T) {
-		processor, _, mockAPI, db, cleanup := setupProcessorTest(t)
+		processor, _, _, mockAPI, db, cleanup := setupProcessorTest(t)
 		defer cleanup()
 		repo := NewRepository(db)
 		queue := &Queue{Name: "q-fail", Status: StatusPending}
@@ -73,7 +72,7 @@ func TestQueueProcessor_ProcessEligibleQueue(t *testing.T) {
 	})
 
 	t.Run("NEGATIVE-EmptyQueue", func(t *testing.T) {
-		processor, _, mockAPI, _, cleanup := setupProcessorTest(t)
+		processor, _, _, mockAPI, _, cleanup := setupProcessorTest(t)
 		defer cleanup()
 
 		err := processor.ProcessEligibleQueue(context.Background())
@@ -83,7 +82,7 @@ func TestQueueProcessor_ProcessEligibleQueue(t *testing.T) {
 	})
 
 	t.Run("POSITIVE-ChainProcessing", func(t *testing.T) {
-		processor, mockPublisher, mockAPI, db, cleanup := setupProcessorTest(t)
+		processor, mockPublisher, _, mockAPI, db, cleanup := setupProcessorTest(t)
 		defer cleanup()
 		repo := NewRepository(db)
 		for i := 0; i < 3; i++ {
@@ -108,7 +107,7 @@ func TestQueueProcessor_ProcessEligibleQueue(t *testing.T) {
 
 func TestQueueProcessor_TriggerProcessing(t *testing.T) {
 	t.Run("POSITIVE-PublishSuccess", func(t *testing.T) {
-		processor, mockPublisher, _, _, cleanup := setupProcessorTest(t)
+		processor, mockPublisher, _, _, _, cleanup := setupProcessorTest(t)
 		defer cleanup()
 		mockPublisher.EXPECT().
 			PublishWithContext(mock.Anything, "", "queue_processing", false, false, mock.Anything).
@@ -119,7 +118,7 @@ func TestQueueProcessor_TriggerProcessing(t *testing.T) {
 	})
 
 	t.Run("NEGATIVE-PublishError", func(t *testing.T) {
-		processor, mockPublisher, _, _, cleanup := setupProcessorTest(t)
+		processor, mockPublisher, _, _, _, cleanup := setupProcessorTest(t)
 		defer cleanup()
 		errExpected := assert.AnError
 		mockPublisher.EXPECT().
@@ -133,22 +132,20 @@ func TestQueueProcessor_TriggerProcessing(t *testing.T) {
 }
 
 func TestQueueProcessor_Stop(t *testing.T) {
-	processor, mockPublisher, _, _, cleanup := setupProcessorTest(t)
+	processor, mockPublisher, mockCloser, _, _, cleanup := setupProcessorTest(t)
 	defer cleanup()
 
 	mockPublisher.EXPECT().Close().Return(nil).Once()
-	mockConn := NewMockCloser(t)
-	mockConn.EXPECT().Close().Return(nil).Once()
-	processor.conn = mockConn
+	mockCloser.EXPECT().Close().Return(nil).Once()
 
 	processor.Stop()
 	mockPublisher.AssertExpectations(t)
-	mockConn.AssertExpectations(t)
+	mockCloser.AssertExpectations(t)
 }
 
 func TestQueueProcessor_Start(t *testing.T) {
 	t.Run("POSITIVE-ProcessMessage", func(t *testing.T) {
-		processor, mockPublisher, mockAPI, db, cleanup := setupProcessorTest(t)
+		processor, mockPublisher, _, mockAPI, db, cleanup := setupProcessorTest(t)
 		defer cleanup()
 
 		// Setup: insert eligible queue
@@ -184,8 +181,8 @@ func TestQueueProcessor_Start(t *testing.T) {
 	})
 }
 
-func TestQueueProcessor_ShiftingQueue_AntiStarvation(t *testing.T) {
-	processor, mockPublisher, apiMock, db, cleanup := setupProcessorTest(t)
+func TestQueueProcessor_INTEGRATION_ShiftingQueue_AntiStarvation(t *testing.T) {
+	processor, mockPublisher, _, apiMock, db, cleanup := setupProcessorTest(t)
 	defer cleanup()
 	repo := NewRepository(db)
 	mockPublisher.EXPECT().PublishWithContext(mock.Anything, "", "queue_processing", false, false, mock.Anything).Return(nil).Maybe()
@@ -228,8 +225,8 @@ func TestQueueProcessor_ShiftingQueue_AntiStarvation(t *testing.T) {
 	assert.Equal(t, StatusCompleted, q3.Status)
 }
 
-func TestQueueProcessor_Starvation_BurstInsert(t *testing.T) {
-	processor, mockPublisher, apiMock, db, cleanup := setupProcessorTest(t)
+func TestQueueProcessor_INTEGRATION_Starvation_BurstInsert(t *testing.T) {
+	processor, mockPublisher, _, apiMock, db, cleanup := setupProcessorTest(t)
 	defer cleanup()
 	repo := NewRepository(db)
 	mockPublisher.EXPECT().PublishWithContext(mock.Anything, "", "queue_processing", false, false, mock.Anything).Return(nil).Maybe()
@@ -260,8 +257,8 @@ func TestQueueProcessor_Starvation_BurstInsert(t *testing.T) {
 	assert.Equal(t, 1, qf.RetryCount)
 }
 
-func TestQueueProcessor_MultipleFailures_RetryCount(t *testing.T) {
-	processor, mockPublisher, apiMock, db, cleanup := setupProcessorTest(t)
+func TestQueueProcessor_INTEGRATION_MultipleFailures_RetryCount(t *testing.T) {
+	processor, mockPublisher, _, apiMock, db, cleanup := setupProcessorTest(t)
 	defer cleanup()
 	repo := NewRepository(db)
 	mockPublisher.EXPECT().PublishWithContext(mock.Anything, "", "queue_processing", false, false, mock.Anything).Return(nil).Maybe()
@@ -282,8 +279,8 @@ func TestQueueProcessor_MultipleFailures_RetryCount(t *testing.T) {
 	assert.Equal(t, 2, qr.RetryCount)
 }
 
-func TestQueueProcessor_InterleavedSuccessFailure(t *testing.T) {
-	processor, mockPublisher, apiMock, db, cleanup := setupProcessorTest(t)
+func TestQueueProcessor_INTEGRATION_InterleavedSuccessFailure(t *testing.T) {
+	processor, mockPublisher, _, apiMock, db, cleanup := setupProcessorTest(t)
 	defer cleanup()
 	repo := NewRepository(db)
 	mockPublisher.EXPECT().PublishWithContext(mock.Anything, "", "queue_processing", false, false, mock.Anything).Return(nil).Maybe()
@@ -321,8 +318,8 @@ func TestQueueProcessor_InterleavedSuccessFailure(t *testing.T) {
 	assert.Equal(t, 0, q3.RetryCount)
 }
 
-func TestQueueProcessor_AllQueuesFailedThenSucceed(t *testing.T) {
-	processor, mockPublisher, apiMock, db, cleanup := setupProcessorTest(t)
+func TestQueueProcessor_INTEGRATION_AllQueuesFailedThenSucceed(t *testing.T) {
+	processor, mockPublisher, _, apiMock, db, cleanup := setupProcessorTest(t)
 	defer cleanup()
 	repo := NewRepository(db)
 	mockPublisher.EXPECT().PublishWithContext(mock.Anything, "", "queue_processing", false, false, mock.Anything).Return(nil).Maybe()
