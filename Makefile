@@ -24,7 +24,7 @@ build:
 
 # Run tests with coverage
 test:
-	go test -v -race -coverprofile=coverage.out ./...
+	go test -timeout=3s -v -race -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out -o coverage.html
 
 # Generate mocks using mockery

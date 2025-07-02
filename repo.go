@@ -25,8 +25,8 @@ func (r *Repository) Save(ctx context.Context, queue *Queue) error {
 func (r *Repository) Fetch(ctx context.Context) ([]Queue, error) {
 	var queues []Queue
 	err := r.db.WithContext(ctx).
+		Order("status ASC, GREATEST(created_at, COALESCE(last_retry_at, created_at)) ASC").
 		Find(&queues).
-		Order("GREATEST(created_at, COALESCE(last_retry_at, created_at)) ASC").
 		Error
 	if err != nil {
 		return nil, err

@@ -47,7 +47,7 @@ This repository is a **sample project** demonstrating a robust queue processing 
   - Uses RabbitMQ for real-world queue processing simulation.
 - **Simulation via Integration Test:**
   - The shifting and anti-starvation logic is simulated and validated using integration tests.
-  - **Note:** You must use a local database (e.g., Postgres) for integration tests. In-memory DB (SQLite) is not reliable for this shifting logic (SQLite in-memory is just broken for this use case—don't even bother, it'll drive you nuts). Just use Postgres or another real database.
+  - **Note:** As of the latest update, both Postgres and SQLite (including in-memory) are fully supported for all integration tests and shifting/anti-starvation logic. The shifting mechanism is now robust and reliable on both backends, thanks to a fix using UnixNano for timestamp comparison in SQLite.
 
 ## API Endpoints
 
@@ -94,124 +94,318 @@ This repository is a **sample project** demonstrating a robust queue processing 
 
 ### POSITIVE-ShiftingQueue_AntiStarvation
 
+**Initial State:**
+| Pos | Name          | created_at | last_retry_at | retry | status   |
+|-----|---------------|------------|--------------|-------|----------|
+| 1   | queue-oldest  | 07:27:58   | 00:00:00     | 0     | pending  |
+| 2   | queue-middle  | 07:57:58   | 00:00:00     | 0     | pending  |
+| 3   | queue-newest  | 08:27:58   | 00:00:00     | 0     | pending  |
+
+**After 1st process:**
+| Pos | Name          | created_at | last_retry_at | retry | status   |
+|-----|---------------|------------|--------------|-------|----------|
+| 1   | queue-middle  | 07:57:58   | 00:00:00     | 0     | pending  |
+| 2   | queue-newest  | 08:27:58   | 00:00:00     | 0     | pending  |
+| 3   | queue-oldest* | 07:27:58   | 08:27:58     | 1     | failed   |
+
+**After 2nd process:**
+| Pos | Name          | created_at | last_retry_at | retry | status     |
+|-----|---------------|------------|--------------|-------|------------|
+| 1   | queue-newest  | 08:27:58   | 00:00:00     | 0     | pending    |
+| 2   | queue-oldest  | 07:27:58   | 08:27:58     | 1     | failed     |
+| 3   | queue-middle* | 07:57:58   | 00:00:00     | 0     | completed  |
+
+**After 3rd process:**
 | Pos | Name           | created_at | last_retry_at | retry | status     |
 |-----|----------------|------------|--------------|-------|------------|
-| 1   | queue-oldest   | 18:39:21   | 00:00:00     | 0     | pending    |
-| 2   | queue-middle   | 19:09:21   | 00:00:00     | 0     | pending    |
-| 3   | queue-newest   | 19:39:21   | 00:00:00     | 0     | pending    |
+| 1   | queue-oldest   | 07:27:58   | 08:27:58     | 1     | failed     |
+| 2   | queue-middle   | 07:57:58   | 00:00:00     | 0     | completed  |
+| 3   | queue-newest*  | 08:27:58   | 00:00:00     | 0     | completed  |
 
-After 1st process:
+**After 4th process:**
 | Pos | Name           | created_at | last_retry_at | retry | status     |
 |-----|----------------|------------|--------------|-------|------------|
-| 1   | queue-middle   | 19:09:21   | 00:00:00     | 0     | pending    |
-| 2   | queue-newest   | 19:39:21   | 00:00:00     | 0     | pending    |
-| 3   | queue-oldest*  | 18:39:21   | 19:39:21     | 1     | failed     |
-
-After 2nd process:
-| Pos | Name           | created_at | last_retry_at | retry | status     |
-|-----|----------------|------------|--------------|-------|------------|
-| 1   | queue-newest   | 19:39:21   | 00:00:00     | 0     | pending    |
-| 2   | queue-oldest   | 18:39:21   | 19:39:21     | 1     | failed     |
-| 3   | queue-middle*  | 19:09:21   | 00:00:00     | 0     | completed  |
-
-After 3rd process:
-| Pos | Name           | created_at | last_retry_at | retry | status     |
-|-----|----------------|------------|--------------|-------|------------|
-| 1   | queue-oldest   | 18:39:21   | 19:39:21     | 1     | failed     |
-| 2   | queue-middle   | 19:09:21   | 00:00:00     | 0     | completed  |
-| 3   | queue-newest*  | 19:39:21   | 00:00:00     | 0     | completed  |
-
-After 4th process:
-| Pos | Name           | created_at | last_retry_at | retry | status     |
-|-----|----------------|------------|--------------|-------|------------|
-| 1   | queue-middle   | 19:09:21   | 00:00:00     | 0     | completed  |
-| 2   | queue-newest   | 19:39:21   | 00:00:00     | 0     | completed  |
-| 3   | queue-oldest   | 18:39:21   | 19:39:21     | 1     | completed  |
-
-**Legend:**
-- An asterisk (*) next to a queue name indicates that the queue has moved more than one position or had a significant status change (e.g., failed or completed) compared to the previous step. Simple one-slot shifts are not marked.
-- All data is from real integration test output, not placeholders.
+| 1   | queue-middle   | 07:57:58   | 00:00:00     | 0     | completed  |
+| 2   | queue-newest   | 08:27:58   | 00:00:00     | 0     | completed  |
+| 3   | queue-oldest*  | 07:27:58   | 08:27:58     | 1     | completed  |
 
 ### NEGATIVE-Starvation_BurstInsert
 
-#### Initial State
+**Initial State:**
+| Pos | Name           | created_at | last_retry_at | retry | status   |
+|-----|----------------|------------|--------------|-------|----------|
+| 1   | queue-burst-0  | 00:23:57   | 00:00:00     | 0     | pending  |
+| 2   | queue-burst-1  | 00:23:57   | 00:00:00     | 0     | pending  |
+| 3   | queue-burst-2  | 00:23:57   | 00:00:00     | 0     | pending  |
+| 4   | queue-burst-3  | 00:23:57   | 00:00:00     | 0     | pending  |
+| 5   | queue-burst-4  | 00:23:57   | 00:00:00     | 0     | pending  |
+| 6   | queue-burst-5  | 00:23:57   | 00:00:00     | 0     | pending  |
+| 7   | queue-burst-6  | 00:23:57   | 00:00:00     | 0     | pending  |
+| 8   | queue-burst-7  | 00:23:57   | 00:00:00     | 0     | pending  |
+| 9   | queue-burst-8  | 00:23:57   | 00:00:00     | 0     | pending  |
+| 10  | queue-burst-9  | 00:23:57   | 00:00:00     | 0     | pending  |
+| 11  | queue-fail     | 00:23:57   | 00:23:57     | 1     | failed   |
+
+**After fail queue-fail**
 | Pos | Name           | created_at | last_retry_at | retry | status     |
 |-----|----------------|------------|--------------|-------|------------|
-| 1   | queue-burst-0  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 2   | queue-burst-1  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 3   | queue-burst-2  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 4   | queue-burst-3  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 5   | queue-burst-4  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 6   | queue-burst-5  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 7   | queue-burst-6  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 8   | queue-burst-7  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 9   | queue-burst-8  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 10  | queue-burst-9  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 11  | queue-fail     | 19:39:21   | 19:39:21     | 1     | failed     |
+| 1   | queue-burst-0  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 2   | queue-burst-1  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 3   | queue-burst-2  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 4   | queue-burst-3  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 5   | queue-burst-4  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 6   | queue-burst-5  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 7   | queue-burst-6  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 8   | queue-burst-7  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 9   | queue-burst-8  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 10  | queue-burst-9  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 11  | queue-fail*    | 00:23:57   | 00:23:57     | 1     | failed     |
 
-#### After fail queue-fail
+**After process burst-0**
 | Pos | Name           | created_at | last_retry_at | retry | status     |
 |-----|----------------|------------|--------------|-------|------------|
-| 1   | queue-burst-0  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 2   | queue-burst-1  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 3   | queue-burst-2  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 4   | queue-burst-3  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 5   | queue-burst-4  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 6   | queue-burst-5  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 7   | queue-burst-6  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 8   | queue-burst-7  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 9   | queue-burst-8  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 10  | queue-burst-9  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 11  | queue-fail*    | 19:39:21   | 19:39:21     | 1     | failed     |
+| 1   | queue-burst-1  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 2   | queue-burst-2  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 3   | queue-burst-3  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 4   | queue-burst-4  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 5   | queue-burst-5  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 6   | queue-burst-6  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 7   | queue-burst-7  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 8   | queue-burst-8  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 9   | queue-burst-9  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 10  | queue-fail     | 00:23:57   | 00:23:57     | 1     | failed     |
+| 11  | queue-burst-0* | 00:23:57   | 00:00:00     | 0     | completed  |
 
-#### After process burst-0
+**After process burst-1**
 | Pos | Name           | created_at | last_retry_at | retry | status     |
 |-----|----------------|------------|--------------|-------|------------|
-| 1   | queue-burst-1  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 2   | queue-burst-2  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 3   | queue-burst-3  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 4   | queue-burst-4  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 5   | queue-burst-5  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 6   | queue-burst-6  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 7   | queue-burst-7  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 8   | queue-burst-8  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 9   | queue-burst-9  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 10  | queue-fail     | 19:39:21   | 19:39:21     | 1     | failed     |
-| 11  | queue-burst-0* | 19:39:21   | 00:00:00     | 0     | completed  |
+| 1   | queue-burst-2  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 2   | queue-burst-3  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 3   | queue-burst-4  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 4   | queue-burst-5  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 5   | queue-burst-6  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 6   | queue-burst-7  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 7   | queue-burst-8  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 8   | queue-burst-9  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 9   | queue-fail     | 00:23:57   | 00:23:57     | 1     | failed     |
+| 10  | queue-burst-0  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 11  | queue-burst-1* | 00:23:57   | 00:00:00     | 0     | completed  |
 
-#### After process burst-1
+**After process burst-2**
 | Pos | Name           | created_at | last_retry_at | retry | status     |
 |-----|----------------|------------|--------------|-------|------------|
-| 1   | queue-burst-2  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 2   | queue-burst-3  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 3   | queue-burst-4  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 4   | queue-burst-5  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 5   | queue-burst-6  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 6   | queue-burst-7  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 7   | queue-burst-8  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 8   | queue-burst-9  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 9   | queue-fail     | 19:39:21   | 19:39:21     | 1     | failed     |
-| 10  | queue-burst-0  | 19:39:21   | 00:00:00     | 0     | completed  |
-| 11  | queue-burst-1* | 19:39:21   | 00:00:00     | 0     | completed  |
+| 1   | queue-burst-3  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 2   | queue-burst-4  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 3   | queue-burst-5  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 4   | queue-burst-6  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 5   | queue-burst-7  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 6   | queue-burst-8  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 7   | queue-burst-9  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 8   | queue-fail     | 00:23:57   | 00:23:57     | 1     | failed     |
+| 9   | queue-burst-0  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 10  | queue-burst-1  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 11  | queue-burst-2* | 00:23:57   | 00:00:00     | 0     | completed  |
 
-#### After process burst-2
+**After process burst-3**
 | Pos | Name           | created_at | last_retry_at | retry | status     |
 |-----|----------------|------------|--------------|-------|------------|
-| 1   | queue-burst-3  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 2   | queue-burst-4  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 3   | queue-burst-5  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 4   | queue-burst-6  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 5   | queue-burst-7  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 6   | queue-burst-8  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 7   | queue-burst-9  | 19:39:21   | 00:00:00     | 0     | pending    |
-| 8   | queue-fail     | 19:39:21   | 19:39:21     | 1     | failed     |
-| 9   | queue-burst-0  | 19:39:21   | 00:00:00     | 0     | completed  |
-| 10  | queue-burst-1  | 19:39:21   | 00:00:00     | 0     | completed  |
-| 11  | queue-burst-2* | 19:39:21   | 00:00:00     | 0     | completed  |
+| 1   | queue-burst-4  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 2   | queue-burst-5  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 3   | queue-burst-6  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 4   | queue-burst-7  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 5   | queue-burst-8  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 6   | queue-burst-9  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 7   | queue-fail     | 00:23:57   | 00:23:57     | 1     | failed     |
+| 8   | queue-burst-0  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 9   | queue-burst-1  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 10  | queue-burst-2  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 11  | queue-burst-3* | 00:23:57   | 00:00:00     | 0     | completed  |
 
-#### ...
+**After process burst-4**
+| Pos | Name           | created_at | last_retry_at | retry | status     |
+|-----|----------------|------------|--------------|-------|------------|
+| 1   | queue-burst-5  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 2   | queue-burst-6  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 3   | queue-burst-7  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 4   | queue-burst-8  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 5   | queue-burst-9  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 6   | queue-fail     | 00:23:57   | 00:23:57     | 1     | failed     |
+| 7   | queue-burst-0  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 8   | queue-burst-1  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 9   | queue-burst-2  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 10  | queue-burst-3  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 11  | queue-burst-4* | 00:23:57   | 00:00:00     | 0     | completed  |
 
-(Repeat the same pattern for burst-3 to burst-9 and after retry queue-fail, each as a vertical table. Only the processed queue in each step gets an asterisk.)
+**After process burst-5**
+| Pos | Name           | created_at | last_retry_at | retry | status     |
+|-----|----------------|------------|--------------|-------|------------|
+| 1   | queue-burst-6  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 2   | queue-burst-7  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 3   | queue-burst-8  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 4   | queue-burst-9  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 5   | queue-fail     | 00:23:57   | 00:23:57     | 1     | failed     |
+| 6   | queue-burst-0  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 7   | queue-burst-1  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 8   | queue-burst-2  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 9   | queue-burst-3  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 10  | queue-burst-4  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 11  | queue-burst-5* | 00:23:57   | 00:00:00     | 0     | completed  |
+
+**After process burst-6**
+| Pos | Name           | created_at | last_retry_at | retry | status     |
+|-----|----------------|------------|--------------|-------|------------|
+| 1   | queue-burst-7  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 2   | queue-burst-8  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 3   | queue-burst-9  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 4   | queue-fail     | 00:23:57   | 00:23:57     | 1     | failed     |
+| 5   | queue-burst-0  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 6   | queue-burst-1  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 7   | queue-burst-2  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 8   | queue-burst-3  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 9   | queue-burst-4  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 10  | queue-burst-5  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 11  | queue-burst-6* | 00:23:57   | 00:00:00     | 0     | completed  |
+
+**After process burst-7**
+| Pos | Name           | created_at | last_retry_at | retry | status     |
+|-----|----------------|------------|--------------|-------|------------|
+| 1   | queue-burst-8  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 2   | queue-burst-9  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 3   | queue-fail     | 00:23:57   | 00:23:57     | 1     | failed     |
+| 4   | queue-burst-0  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 5   | queue-burst-1  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 6   | queue-burst-2  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 7   | queue-burst-3  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 8   | queue-burst-4  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 9   | queue-burst-5  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 10  | queue-burst-6  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 11  | queue-burst-7* | 00:23:57   | 00:00:00     | 0     | completed  |
+
+**After process burst-8**
+| Pos | Name           | created_at | last_retry_at | retry | status     |
+|-----|----------------|------------|--------------|-------|------------|
+| 1   | queue-burst-9  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 2   | queue-fail     | 00:23:57   | 00:23:57     | 1     | failed     |
+| 3   | queue-burst-0  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 4   | queue-burst-1  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 5   | queue-burst-2  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 6   | queue-burst-3  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 7   | queue-burst-4  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 8   | queue-burst-5  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 9   | queue-burst-6  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 10  | queue-burst-7  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 11  | queue-burst-8* | 00:23:57   | 00:00:00     | 0     | completed  |
+
+**After process burst-9**
+| Pos | Name           | created_at | last_retry_at | retry | status     |
+|-----|----------------|------------|--------------|-------|------------|
+| 1   | queue-fail     | 00:23:57   | 00:23:57     | 1     | failed     |
+| 2   | queue-burst-0  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 3   | queue-burst-1  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 4   | queue-burst-2  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 5   | queue-burst-3  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 6   | queue-burst-4  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 7   | queue-burst-5  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 8   | queue-burst-6  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 9   | queue-burst-7  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 10  | queue-burst-8  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 11  | queue-burst-9* | 00:23:57   | 00:00:00     | 0     | completed  |
+
+### POSITIVE-MultipleFailures_RetryCount
+
+**After 1st fail:**
+| Pos | Name        | created_at | last_retry_at | retry | status  |
+|-----|-------------|------------|--------------|-------|---------|
+| 1   | queue-retry | 00:23:57   | 00:23:57     | 1     | failed  |
+
+**After 2nd fail:**
+| Pos | Name        | created_at | last_retry_at | retry | status  |
+|-----|-------------|------------|--------------|-------|---------|
+| 1   | queue-retry | 00:23:57   | 00:23:57     | 2     | failed  |
+
+**After success:**
+| Pos | Name        | created_at | last_retry_at | retry | status     |
+|-----|-------------|------------|--------------|-------|------------|
+| 1   | queue-retry*| 00:23:57   | 00:23:57     | 2     | completed  |
+
+### POSITIVE-InterleavedSuccessFailure
+
+**After queue1 fail:**
+| Pos | Name    | created_at | last_retry_at | retry | status  |
+|-----|---------|------------|--------------|-------|---------|
+| 1   | queue2  | 00:23:57   | 00:00:00     | 0     | pending |
+| 2   | queue1  | 00:23:57   | 00:23:57     | 1     | failed  |
+
+**After queue2 success:**
+| Pos | Name    | created_at | last_retry_at | retry | status     |
+|-----|---------|------------|--------------|-------|------------|
+| 1   | queue2* | 00:23:57   | 00:00:00     | 0     | completed  |
+| 2   | queue1  | 00:23:57   | 00:23:57     | 1     | failed     |
+
+**After insert queue3:**
+| Pos | Name    | created_at | last_retry_at | retry | status     |
+|-----|---------|------------|--------------|-------|------------|
+| 1   | queue3  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 2   | queue2  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 3   | queue1  | 00:23:57   | 00:23:57     | 1     | failed     |
+
+**After queue1 retry success:**
+| Pos | Name    | created_at | last_retry_at | retry | status     |
+|-----|---------|------------|--------------|-------|------------|
+| 1   | queue3  | 00:23:57   | 00:00:00     | 0     | pending    |
+| 2   | queue2  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 3   | queue1* | 00:23:57   | 00:23:57     | 1     | completed  |
+
+**After queue3 success:**
+| Pos | Name    | created_at | last_retry_at | retry | status     |
+|-----|---------|------------|--------------|-------|------------|
+| 1   | queue2  | 00:23:57   | 00:00:00     | 0     | completed  |
+| 2   | queue1  | 00:23:57   | 00:23:57     | 1     | completed  |
+| 3   | queue3* | 00:23:57   | 00:00:00     | 0     | completed  |
+
+### POSITIVE-AllQueuesFailedThenSucceed
+
+**After fail-1:**
+| Pos | Name   | created_at | last_retry_at | retry | status  |
+|-----|--------|------------|--------------|-------|---------|
+| 1   | fail2  | 00:23:57   | 00:00:00     | 0     | pending |
+| 2   | fail3  | 00:23:57   | 00:00:00     | 0     | pending |
+| 3   | fail1  | 00:23:57   | 00:23:57     | 1     | failed  |
+
+**After fail-2:**
+| Pos | Name   | created_at | last_retry_at | retry | status  |
+|-----|--------|------------|--------------|-------|---------|
+| 1   | fail3  | 00:23:57   | 00:00:00     | 0     | pending |
+| 2   | fail1  | 00:23:57   | 00:23:57     | 1     | failed  |
+| 3   | fail2  | 00:23:57   | 00:23:57     | 1     | failed  |
+
+**After fail-3:**
+| Pos | Name   | created_at | last_retry_at | retry | status  |
+|-----|--------|------------|--------------|-------|---------|
+| 1   | fail1  | 00:23:57   | 00:23:57     | 1     | failed  |
+| 2   | fail2  | 00:23:57   | 00:23:57     | 1     | failed  |
+| 3   | fail3  | 00:23:57   | 00:23:57     | 1     | failed  |
+
+**After retry success-1:**
+| Pos | Name   | created_at | last_retry_at | retry | status     |
+|-----|--------|------------|--------------|-------|------------|
+| 1   | fail1* | 00:23:57   | 00:23:57     | 1     | completed  |
+| 2   | fail2  | 00:23:57   | 00:23:57     | 1     | failed     |
+| 3   | fail3  | 00:23:57   | 00:23:57     | 1     | failed     |
+
+**After retry success-2:**
+| Pos | Name   | created_at | last_retry_at | retry | status     |
+|-----|--------|------------|--------------|-------|------------|
+| 1   | fail1  | 00:23:57   | 00:23:57     | 1     | completed  |
+| 2   | fail2* | 00:23:57   | 00:23:57     | 1     | completed  |
+| 3   | fail3  | 00:23:57   | 00:23:57     | 1     | failed     |
+
+**After retry success-3:**
+| Pos | Name   | created_at | last_retry_at | retry | status     |
+|-----|--------|------------|--------------|-------|------------|
+| 1   | fail1  | 00:23:57   | 00:23:57     | 1     | completed  |
+| 2   | fail2  | 00:23:57   | 00:23:57     | 1     | completed  |
+| 3   | fail3* | 00:23:57   | 00:23:57     | 1     | completed  |
 
 **Legend:**
 - The asterisk (*) marks the queue that was just processed and moved to the completed position in that step.

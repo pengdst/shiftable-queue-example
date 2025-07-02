@@ -26,8 +26,8 @@ type QueueStatus int
 const (
 	StatusPending QueueStatus = iota
 	StatusProcessing
-	StatusCompleted
 	StatusFailed
+	StatusCompleted
 )
 
 func (s QueueStatus) String() string {

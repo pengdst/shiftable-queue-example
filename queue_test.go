@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,7 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/rabbitmq/amqp091-go"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"gorm.io/driver/sqlite"
@@ -23,15 +26,51 @@ type queueResp struct {
 	Data []Queue `json:"data"`
 }
 
-func setupTestDatabase(t *testing.T) (*gorm.DB, func()) {
-	db := NewGORM(Load())
-	// Pool setup
-	sqlDB, _ := db.DB()
-	if sqlDB != nil {
-		sqlDB.SetMaxIdleConns(1)
-		sqlDB.SetMaxOpenConns(1)
-		sqlDB.SetConnMaxLifetime(time.Hour)
+func openInMemorySQLiteWithGreatest() *gorm.DB {
+	rawConn, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		panic(err)
 	}
+	driver := rawConn.Driver().(*sqlite3.SQLiteDriver)
+	driver.ConnectHook = func(conn *sqlite3.SQLiteConn) error {
+		return conn.RegisterFunc("GREATEST", func(a, b string) int64 {
+			parse := func(s string) int64 {
+				if s == "" || s == "0001-01-01 00:00:00" || s == "<nil>" {
+					return 0
+				}
+				formats := []string{
+					"2006-01-02 15:04:05.999999999-07:00",
+					"2006-01-02 15:04:05-07:00",
+					"2006-01-02 15:04:05",
+				}
+				for _, f := range formats {
+					t, err := time.Parse(f, s)
+					if err == nil {
+						return t.UnixNano()
+					}
+					log.Info().Err(err).Msgf("parsed time: %v", t)
+				}
+				return 0
+			}
+			ta := parse(a)
+			tb := parse(b)
+			if ta > tb {
+				return ta
+			}
+			return tb
+		}, true)
+	}
+	db, err := gorm.Open(sqlite.Dialector{Conn: rawConn}, &gorm.Config{
+		Logger: NewLogLevel("info"),
+	})
+	if err != nil {
+		panic(err)
+	}
+	return db
+}
+
+func setupTestDatabase(t *testing.T) (*gorm.DB, func()) {
+	db := openInMemorySQLiteWithGreatest()
 	Migrate(db)
 	cleanup := func() {
 		db.Exec("DELETE FROM queues")
@@ -44,26 +83,20 @@ func setupTestDatabase(t *testing.T) (*gorm.DB, func()) {
 }
 
 // Minimal test factory - inject database instance to server
-func setupTestServer() (*httptest.Server, func()) {
+func setupTestServer(t *testing.T) (*httptest.Server, func()) {
 	// Set required RABBITMQ_URL for test environment
 	os.Setenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
 
 	cfg := Load()
-	db, _ := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
-		Logger: NewLogLevel(cfg.LogLevel),
-	})
+	db, cleanupDB := setupTestDatabase(t)
 	server := NewServer(cfg, db)
 
 	ts := httptest.NewServer(server.router)
 
 	cleanup := func() {
 		// Truncate queues table biar ga interfere test lain
-		db.Exec("TRUNCATE TABLE queues RESTART IDENTITY")
+		cleanupDB()
 		ts.Close()
-		sqlDB, _ := db.DB()
-		if sqlDB != nil {
-			sqlDB.Close()
-		}
 	}
 
 	return ts, cleanup
@@ -71,7 +104,7 @@ func setupTestServer() (*httptest.Server, func()) {
 
 // Test CreateQueue function - main happy path
 func TestIntegration_CreateQueue(t *testing.T) {
-	ts, cleanup := setupTestServer()
+	ts, cleanup := setupTestServer(t)
 	defer cleanup()
 
 	createBody := []byte(`{"name": "test-queue"}`)
@@ -84,7 +117,7 @@ func TestIntegration_CreateQueue(t *testing.T) {
 
 // Test GetQueueList function - all scenarios
 func TestIntegration_GetQueueList(t *testing.T) {
-	ts, cleanup := setupTestServer()
+	ts, cleanup := setupTestServer(t)
 	defer cleanup()
 
 	t.Run("POSITIVE-BasicRetrieval_ReturnsCreatedQueue", func(t *testing.T) {
@@ -113,7 +146,7 @@ func TestIntegration_GetQueueList(t *testing.T) {
 
 // Test DeleteQueueByID function - main happy path
 func TestIntegration_DeleteQueueByID(t *testing.T) {
-	ts, cleanup := setupTestServer()
+	ts, cleanup := setupTestServer(t)
 	defer cleanup()
 
 	client := ts.Client()
@@ -148,7 +181,7 @@ func TestIntegration_DeleteQueueByID(t *testing.T) {
 }
 
 func TestIntegration_LeaveQueue(t *testing.T) {
-	ts, cleanup := setupTestServer()
+	ts, cleanup := setupTestServer(t)
 	defer cleanup()
 	client := ts.Client()
 
@@ -182,7 +215,7 @@ func TestIntegration_LeaveQueue(t *testing.T) {
 
 // Test CreateQueue error handling - primary error path
 func TestIntegration_CreateQueue_InvalidJSON(t *testing.T) {
-	ts, cleanup := setupTestServer()
+	ts, cleanup := setupTestServer(t)
 	defer cleanup()
 
 	resp, err := ts.Client().Post(ts.URL+"/api/v1/queues", "application/json", bytes.NewReader([]byte("invalid json")))
@@ -194,7 +227,7 @@ func TestIntegration_CreateQueue_InvalidJSON(t *testing.T) {
 
 // Test ProcessQueue function - simple trigger test
 func TestIntegration_ProcessQueue(t *testing.T) {
-	ts, cleanup := setupTestServer()
+	ts, cleanup := setupTestServer(t)
 	defer cleanup()
 
 	t.Run("POSITIVE-TriggerProcessing_ReturnsSuccess", func(t *testing.T) {
@@ -285,7 +318,7 @@ func TestIntegration_RabbitMQ_QueueProcessing(t *testing.T) {
 		defer rabbitCleanup()
 
 		// Setup HTTP test server
-		ts, cleanup := setupTestServer()
+		ts, cleanup := setupTestServer(t)
 		defer cleanup()
 
 		client := ts.Client()
@@ -335,14 +368,8 @@ func TestIntegration_RabbitMQ_QueueProcessing(t *testing.T) {
 
 		// Setup test database
 		cfg := Load()
-		db := NewGORM(cfg)
-		defer func() {
-			db.Exec("DELETE FROM queues")
-			sqlDB, _ := db.DB()
-			if sqlDB != nil {
-				sqlDB.Close()
-			}
-		}()
+		db, cleanup := setupTestDatabase(t)
+		defer cleanup()
 		// Create test data
 		repo := NewRepository(db)
 		testQueue := &Queue{
@@ -612,14 +639,14 @@ func TestIntegration_ShiftingQueueMechanism(t *testing.T) {
 			_ = repo.Save(context.Background(), q)
 		}
 		// Step 2: Semua gagal
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			apiMock.EXPECT().SimulateProcessing(mock.Anything).Return(assert.AnError).Once()
 			_ = processor.ProcessEligibleQueue(context.Background())
 			queues, _ := repo.Fetch(context.Background())
 			t.Logf("After fail-%d: \n%v", i+1, queueNames(queues))
 		}
 		// Step 3: Semua retry sukses
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			apiMock.EXPECT().SimulateProcessing(mock.Anything).Return(nil).Once()
 			_ = processor.ProcessEligibleQueue(context.Background())
 			queues, _ := repo.Fetch(context.Background())
