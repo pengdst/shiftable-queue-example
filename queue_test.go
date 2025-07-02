@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
@@ -24,6 +23,21 @@ import (
 type queueResp struct {
 	Data []Queue `json:"data"`
 }
+
+// NoopPublisher implements Publisher, does nothing (for integration test without RabbitMQ)
+type NoopPublisher struct{}
+
+func (n *NoopPublisher) PublishWithContext(ctx context.Context, exchange, key string, mandatory, immediate bool, msg amqp091.Publishing) error {
+	return nil
+}
+
+func (n *NoopPublisher) Consume(queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args amqp091.Table) (<-chan amqp091.Delivery, error) {
+	ch := make(chan amqp091.Delivery)
+	close(ch)
+	return ch, nil
+}
+
+func (n *NoopPublisher) Close() error { return nil }
 
 func openInMemorySQLiteWithGreatest() *gorm.DB {
 	rawConn, err := sql.Open("sqlite3", ":memory:")
@@ -83,20 +97,18 @@ func setupTestDatabase(t *testing.T) (*gorm.DB, func()) {
 
 // Minimal test factory - inject database instance to server
 func setupTestServer(t *testing.T) (*httptest.Server, func()) {
-	// Set required RABBITMQ_URL for test environment
-	os.Setenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
-
 	db, cleanupDB := setupTestDatabase(t)
-	server := NewServer(WithDB(db))
-
+	processor := &QueueProcessor{
+		repo:    NewRepository(db),
+		channel: &NoopPublisher{},
+		api:     &FakeAPI{},
+	}
+	server := NewServer(WithDB(db), WithProcessor(processor))
 	ts := httptest.NewServer(server.router)
-
 	cleanup := func() {
-		// Truncate queues table biar ga interfere test lain
 		cleanupDB()
 		ts.Close()
 	}
-
 	return ts, cleanup
 }
 
