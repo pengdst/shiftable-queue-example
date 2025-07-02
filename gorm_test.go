@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -33,9 +34,9 @@ func TestNewLogLevel(t *testing.T) {
 }
 
 func TestLogger_logWithCtx(t *testing.T) {
-	t.Run("POSITIVE-WithContext", func(t *testing.T) {
+	t.Run("POSITIVE-WithZerologContext", func(t *testing.T) {
 		l := NewLogLevel("info")
-		ctx := context.Background()
+		ctx := log.With().Logger().WithContext(context.Background())
 		evt := l.logWithCtx(ctx, zerolog.InfoLevel)
 		assert.NotNil(t, evt)
 	})
@@ -43,6 +44,29 @@ func TestLogger_logWithCtx(t *testing.T) {
 		l := NewLogLevel("info")
 		evt := l.logWithCtx(nil, zerolog.InfoLevel)
 		assert.NotNil(t, evt)
+	})
+	t.Run("POSITIVE-CtxBackground_ReturnNil", func(t *testing.T) {
+		l := NewLogLevel("info")
+		ctx := context.Background()
+		evt := l.logWithCtx(ctx, zerolog.InfoLevel)
+		assert.Nil(t, evt)
+	})
+}
+
+func TestLogger_safeLogMsgf(t *testing.T) {
+	t.Run("POSITIVE-WithZerologContext", func(t *testing.T) {
+		l := NewLogLevel("info")
+		ctx := log.With().Logger().WithContext(context.Background())
+		l.logMsgf(ctx, "test")
+	})
+	t.Run("POSITIVE-WithoutContext", func(t *testing.T) {
+		l := NewLogLevel("info")
+		l.logMsgf(nil, "test")
+	})
+	t.Run("POSITIVE-CtxBackground_NoError", func(t *testing.T) {
+		l := NewLogLevel("info")
+		ctx := context.Background()
+		l.logMsgf(ctx, "test")
 	})
 }
 
@@ -62,5 +86,57 @@ func TestLogger_Trace(t *testing.T) {
 		err := context.DeadlineExceeded
 		l.Trace(context.Background(), begin, f, err)
 		// no panic, no assert needed
+	})
+}
+
+func TestLogger_LogMode(t *testing.T) {
+	l := NewLogLevel("info")
+	ret := l.LogMode(0)
+	assert.Equal(t, l, ret)
+}
+
+func TestLogger_Error(t *testing.T) {
+	t.Run("POSITIVE-WithZerologContext", func(t *testing.T) {
+		l := NewLogLevel("info")
+		ctx := log.With().Logger().WithContext(context.Background())
+		l.Error(ctx, "error message")
+	})
+	t.Run("POSITIVE-WithNilContext", func(t *testing.T) {
+		l := NewLogLevel("info")
+		l.Error(nil, "error message")
+	})
+	t.Run("POSITIVE-WithBackgroundContext", func(t *testing.T) {
+		l := NewLogLevel("info")
+		l.Error(context.Background(), "error message")
+	})
+}
+
+func TestLogger_Warn(t *testing.T) {
+	l := NewLogLevel("warn")
+	t.Run("POSITIVE-WithZerologContext", func(t *testing.T) {
+		ctx := log.With().Logger().WithContext(context.Background())
+		l.Warn(ctx, "warn message")
+	})
+	t.Run("POSITIVE-WithNilContext", func(t *testing.T) {
+		l.Warn(nil, "warn message")
+	})
+	t.Run("POSITIVE-WithBackgroundContext", func(t *testing.T) {
+		l.Warn(context.Background(), "warn message")
+	})
+}
+
+func TestLogger_Info(t *testing.T) {
+	t.Run("POSITIVE-WithZerologContext", func(t *testing.T) {
+		l := NewLogLevel("info")
+		ctx := log.With().Logger().WithContext(context.Background())
+		l.Info(ctx, "info message")
+	})
+	t.Run("POSITIVE-WithNilContext", func(t *testing.T) {
+		l := NewLogLevel("info")
+		l.Info(nil, "info message")
+	})
+	t.Run("POSITIVE-WithBackgroundContext", func(t *testing.T) {
+		l := NewLogLevel("info")
+		l.Info(context.Background(), "info message")
 	})
 }

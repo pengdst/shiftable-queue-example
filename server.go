@@ -14,14 +14,39 @@ import (
 	"gorm.io/gorm"
 )
 
-func NewServer(cfg *Config, db *gorm.DB) *Server {
-	Migrate(db)
+type ServerOption func(*Server)
 
-	// Queue
-	repo := NewRepository(db)
-	processor := NewQueueProcessor(cfg, db, &FakeAPI{})
-	handler := NewHttpHandler(repo, processor)
+func WithConfig(cfg *Config) ServerOption {
+	return func(s *Server) { s.cfg = cfg }
+}
 
+func WithDB(db *gorm.DB) ServerOption {
+	return func(s *Server) { s.db = db }
+}
+
+func WithProcessor(processor QueueTrigger) ServerOption {
+	return func(s *Server) { s.processor = processor }
+}
+
+func NewServer(opts ...ServerOption) *Server {
+	s := &Server{}
+	for _, opt := range opts {
+		opt(s)
+	}
+	// Fallback ke default kalau belum diinject
+	if s.cfg == nil {
+		s.cfg = Load()
+	}
+	if s.db == nil {
+		s.db = NewGORM(s.cfg)
+	}
+	Migrate(s.db)
+	if s.processor == nil {
+		s.processor = NewQueueProcessor(s.cfg, s.db, &FakeAPI{})
+	}
+
+	repo := NewRepository(s.db)
+	handler := NewHttpHandler(repo, s.processor)
 	r := http.NewServeMux()
 	r.HandleFunc("GET /", rootHandler)
 	r.HandleFunc("POST /api/v1/queues", handler.CreateQueue)
@@ -30,11 +55,15 @@ func NewServer(cfg *Config, db *gorm.DB) *Server {
 	r.HandleFunc("POST /api/v1/queues/process", handler.ProcessQueue)
 	r.HandleFunc("POST /api/v1/queues/leave", handler.LeaveQueue)
 
-	return &Server{router: r}
+	s.router = r
+	return s
 }
 
 type Server struct {
-	router *http.ServeMux
+	router    *http.ServeMux
+	cfg       *Config
+	db        *gorm.DB
+	processor QueueTrigger
 }
 
 // Run method of the Server struct runs the HTTP server on the specified port. It initializes

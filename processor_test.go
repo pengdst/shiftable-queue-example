@@ -14,31 +14,32 @@ import (
 
 // Helper untuk setup processor test
 func setupProcessorTest(t *testing.T) (*QueueProcessor, *MockPublisher, *MockRestAPI, *gorm.DB, func()) {
-	db, cleanup := setupTestDatabase(t)
+	db, dbCleanup := setupTestDatabase(t)
+	mq, _, _, mqCleanup := setupRabbitMQTest(t)
 	mockPublisher := NewMockPublisher(t)
 	mockAPI := NewMockRestAPI(t)
 	processor := &QueueProcessor{
 		repo:    NewRepository(db),
-		conn:    nil,
+		conn:    mq,
 		channel: mockPublisher,
 		api:     mockAPI,
+	}
+	cleanup := func() {
+		dbCleanup()
+		mqCleanup()
 	}
 	return processor, mockPublisher, mockAPI, db, cleanup
 }
 
 func TestQueueProcessor_ProcessEligibleQueue(t *testing.T) {
-	cfg := Load()
-
 	t.Run("POSITIVE-Success", func(t *testing.T) {
-		db, cleanup := setupTestDatabase(t)
+		processor, _, mockAPI, db, cleanup := setupProcessorTest(t)
 		defer cleanup()
 		repo := NewRepository(db)
 		queue := &Queue{Name: "q-success", Status: StatusPending}
 		_ = repo.Save(context.Background(), queue)
 
-		mockAPI := NewMockRestAPI(t)
 		mockAPI.EXPECT().SimulateProcessing(mock.AnythingOfType("*main.Queue")).Return(nil).Once()
-		processor := NewQueueProcessor(cfg, db, mockAPI)
 
 		err := processor.ProcessEligibleQueue(context.Background())
 		assert.NoError(t, err)
@@ -51,16 +52,14 @@ func TestQueueProcessor_ProcessEligibleQueue(t *testing.T) {
 	})
 
 	t.Run("NEGATIVE-Failure", func(t *testing.T) {
-		db, cleanup := setupTestDatabase(t)
+		processor, _, mockAPI, db, cleanup := setupProcessorTest(t)
 		defer cleanup()
 		repo := NewRepository(db)
 		queue := &Queue{Name: "q-fail", Status: StatusPending}
 		_ = repo.Save(context.Background(), queue)
 
-		mockAPI := NewMockRestAPI(t)
 		errFail := assert.AnError
 		mockAPI.EXPECT().SimulateProcessing(mock.AnythingOfType("*main.Queue")).Return(errFail).Once()
-		processor := NewQueueProcessor(cfg, db, mockAPI)
 
 		err := processor.ProcessEligibleQueue(context.Background())
 		assert.Error(t, err)
@@ -74,26 +73,24 @@ func TestQueueProcessor_ProcessEligibleQueue(t *testing.T) {
 	})
 
 	t.Run("NEGATIVE-EmptyQueue", func(t *testing.T) {
-		db, cleanup := setupTestDatabase(t)
+		processor, _, mockAPI, _, cleanup := setupProcessorTest(t)
 		defer cleanup()
-		mockAPI := NewMockRestAPI(t)
-		processor := NewQueueProcessor(cfg, db, mockAPI)
 
 		err := processor.ProcessEligibleQueue(context.Background())
 		assert.NoError(t, err)
 		// Nothing to assert in DB, just make sure no panic/error
+		mockAPI.AssertExpectations(t)
 	})
 
 	t.Run("POSITIVE-ChainProcessing", func(t *testing.T) {
-		db, cleanup := setupTestDatabase(t)
+		processor, mockPublisher, mockAPI, db, cleanup := setupProcessorTest(t)
 		defer cleanup()
 		repo := NewRepository(db)
 		for i := 0; i < 3; i++ {
 			_ = repo.Save(context.Background(), &Queue{Name: fmt.Sprintf("q-%d", i), Status: StatusPending})
 		}
-		mockAPI := NewMockRestAPI(t)
 		mockAPI.EXPECT().SimulateProcessing(mock.AnythingOfType("*main.Queue")).Return(nil).Times(3)
-		processor := NewQueueProcessor(cfg, db, mockAPI)
+		mockPublisher.EXPECT().PublishWithContext(mock.Anything, "", "queue_processing", false, false, mock.Anything).Return(nil).Maybe()
 
 		for i := 0; i < 3; i++ {
 			err := processor.ProcessEligibleQueue(context.Background())
@@ -167,6 +164,7 @@ func TestQueueProcessor_Start(t *testing.T) {
 
 		// Setup mock SimulateProcessing
 		mockAPI.EXPECT().SimulateProcessing(mock.AnythingOfType("*main.Queue")).Return(nil).Once()
+		mockPublisher.EXPECT().PublishWithContext(mock.Anything, "", "queue_processing", false, false, mock.Anything).Return(nil).Maybe()
 
 		// Insert a dummy message
 		msgCh <- amqp091.Delivery{}

@@ -87,9 +87,8 @@ func setupTestServer(t *testing.T) (*httptest.Server, func()) {
 	// Set required RABBITMQ_URL for test environment
 	os.Setenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
 
-	cfg := Load()
 	db, cleanupDB := setupTestDatabase(t)
-	server := NewServer(cfg, db)
+	server := NewServer(WithDB(db))
 
 	ts := httptest.NewServer(server.router)
 

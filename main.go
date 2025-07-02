@@ -20,7 +20,7 @@ func main() {
 
 	switch command {
 	case "api":
-		runServer(cfg, db)
+		runServer()
 	case "queue":
 		runProcessor(cfg, db)
 	default:
@@ -30,9 +30,9 @@ func main() {
 	}
 }
 
-func runServer(cfg *Config, db *gorm.DB) {
+func runServer() {
 	log.Info().Msg("Starting HTTP server...")
-	server := NewServer(cfg, db)
+	server := NewServer()
 	server.Run(8080)
 }
 

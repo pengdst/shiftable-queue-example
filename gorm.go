@@ -57,10 +57,15 @@ func NewLogLevel(level string) Logger {
 }
 
 func (l Logger) logWithCtx(ctx context.Context, level zerolog.Level) *zerolog.Event {
-	if ctx != nil {
-		return log.Ctx(ctx).WithLevel(level)
+	if ctx == nil {
+		return l.Log.WithLevel(level)
 	}
-	return l.Log.WithLevel(level)
+
+	return log.Ctx(ctx).WithLevel(level)
+}
+
+func (l Logger) logMsgf(ctx context.Context, msg string, opts ...any) {
+	l.logWithCtx(ctx, l.Level).Msgf(msg, opts...)
 }
 
 // currently we don't use this function, because Level already defined at struct Logger
@@ -69,15 +74,15 @@ func (l Logger) LogMode(level logger.LogLevel) logger.Interface {
 }
 
 func (l Logger) Error(ctx context.Context, msg string, opts ...any) {
-	l.logWithCtx(ctx, l.Level).Msgf(msg, opts...)
+	l.logMsgf(ctx, msg, opts...)
 }
 
 func (l Logger) Warn(ctx context.Context, msg string, opts ...any) {
-	l.logWithCtx(ctx, l.Level).Msgf(msg, opts...)
+	l.logMsgf(ctx, msg, opts...)
 }
 
 func (l Logger) Info(ctx context.Context, msg string, opts ...any) {
-	l.logWithCtx(ctx, l.Level).Msgf(msg, opts...)
+	l.logMsgf(ctx, msg, opts...)
 }
 
 func (l Logger) Trace(ctx context.Context, begin time.Time, f func() (string, int64), err error) {
