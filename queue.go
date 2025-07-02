@@ -53,16 +53,6 @@ type Queue struct {
 	RetryCount  int          `gorm:"default:0"`
 }
 
-type Service struct {
-	repo *Repository
-}
-
-func NewService(repo *Repository) *Service {
-	return &Service{
-		repo: repo,
-	}
-}
-
 type httpHandler struct {
 	repo      *Repository
 	processor QueueTrigger
