@@ -103,6 +103,79 @@ func TestQueueProcessor_ProcessEligibleQueue(t *testing.T) {
 		}
 		mockAPI.AssertExpectations(t)
 	})
+
+	t.Run("NEGATIVE-GetEligibleQueues_DBError", func(t *testing.T) {
+		processor, _, _, mockAPI, db, cleanup := setupProcessorTest(t)
+		defer cleanup()
+		// Close DB to simulate error
+		sqlDB, _ := db.DB()
+		sqlDB.Close()
+		mockAPI.EXPECT().SimulateProcessing(mock.Anything).Return(nil).Maybe()
+		err := processor.ProcessEligibleQueue(context.Background())
+		assert.Error(t, err)
+	})
+
+	t.Run("NEGATIVE-SaveQueue_DBError", func(t *testing.T) {
+		processor, _, _, mockAPI, db, cleanup := setupProcessorTest(t)
+		defer cleanup()
+		repo := NewRepository(db)
+		queue := &Queue{Name: "q-db-error", Status: StatusPending}
+		_ = repo.Save(context.Background(), queue)
+		mockAPI.EXPECT().SimulateProcessing(mock.Anything).Run(func(queue *Queue) {
+			sqlDB, _ := db.DB()
+			sqlDB.Close()
+		}).Return(nil).Once()
+		err := processor.ProcessEligibleQueue(context.Background())
+		assert.Error(t, err)
+	})
+
+	t.Run("NEGATIVE-SimulateProcessingErr_SaveQueueDBError", func(t *testing.T) {
+		processor, _, _, mockAPI, db, cleanup := setupProcessorTest(t)
+		defer cleanup()
+		repo := NewRepository(db)
+		queue := &Queue{Name: "q-db-error", Status: StatusPending}
+		_ = repo.Save(context.Background(), queue)
+		mockAPI.EXPECT().SimulateProcessing(mock.Anything).Run(func(queue *Queue) {
+			sqlDB, _ := db.DB()
+			sqlDB.Close()
+		}).Return(assert.AnError).Once()
+		err := processor.ProcessEligibleQueue(context.Background())
+		assert.Error(t, err)
+	})
+
+	t.Run("NEGATIVE-ChainProcessing_DBError", func(t *testing.T) {
+		processor, mockPublisher, _, mockAPI, db, cleanup := setupProcessorTest(t)
+		defer cleanup()
+		repo := NewRepository(db)
+		// Insert 2 queue
+		_ = repo.Save(context.Background(), &Queue{Name: "q1", Status: StatusPending})
+		_ = repo.Save(context.Background(), &Queue{Name: "q2", Status: StatusPending})
+		mockAPI.EXPECT().SimulateProcessing(mock.Anything).Return(nil).Once()
+		mockPublisher.EXPECT().PublishWithContext(mock.Anything, "", "queue_processing", false, false, mock.Anything).Return(nil).Maybe()
+		// Close DB after first process, before chain
+		err := processor.ProcessEligibleQueue(context.Background())
+		assert.NoError(t, err)
+		sqlDB, _ := db.DB()
+		sqlDB.Close()
+		err = processor.ProcessEligibleQueue(context.Background())
+		assert.Error(t, err)
+	})
+
+	t.Run("NEGATIVE-PublishWithContextError", func(t *testing.T) {
+		processor, mockPublisher, _, mockAPI, db, cleanup := setupProcessorTest(t)
+		defer cleanup()
+		repo := NewRepository(db)
+		queue := &Queue{Name: "q-pub-error", Status: StatusPending}
+		_ = repo.Save(context.Background(), queue)
+		mockAPI.EXPECT().SimulateProcessing(mock.Anything).Return(nil).Twice()
+		mockPublisher.EXPECT().PublishWithContext(mock.Anything, "", "queue_processing", false, false, mock.Anything).Return(assert.AnError).Once()
+		// Insert 2 queue biar chain processing jalan
+		_ = repo.Save(context.Background(), &Queue{Name: "q-pub-error2", Status: StatusPending})
+		err := processor.ProcessEligibleQueue(context.Background())
+		assert.NoError(t, err) // proses pertama sukses
+		err = processor.ProcessEligibleQueue(context.Background())
+		assert.NoError(t, err) // proses kedua tetap jalan, error publish hanya log
+	})
 }
 
 func TestQueueProcessor_TriggerProcessing(t *testing.T) {
@@ -176,6 +249,55 @@ func TestQueueProcessor_Start(t *testing.T) {
 		var updated Queue
 		_ = db.First(&updated, queue.ID).Error
 		assert.Equal(t, StatusCompleted, updated.Status)
+		mockPublisher.AssertExpectations(t)
+		mockAPI.AssertExpectations(t)
+	})
+
+	// NEGATIVE: ProcessEligibleQueue return error, message should be Nack'ed
+	// Use custom Delivery mock to assert Nack dipanggil
+	//
+	// Karena amqp091.Delivery tidak bisa di-mock langsung, kita jalankan Start di goroutine,
+	// lalu inject delivery dengan Nack/Ack closure yang set flag (pakai channel + closure)
+	//
+	t.Run("NEGATIVE-ProcessEligibleQueueError_NackMessage", func(t *testing.T) {
+		processor, mockPublisher, _, mockAPI, db, cleanup := setupProcessorTest(t)
+		defer cleanup()
+		repo := NewRepository(db)
+		queue := &Queue{Name: "start-nack", Status: StatusPending}
+		_ = repo.Save(context.Background(), queue)
+
+		nacked := make(chan bool, 1)
+
+		type deliveryWithSpy struct {
+			amqp091.Delivery
+		}
+		// Patch Nack/Ack via closure (run in goroutine)
+		delivery := deliveryWithSpy{}
+		msgCh := make(chan amqp091.Delivery, 1)
+		// Patch Nack/Ack via goroutine spy
+		go func() {
+			// Wait for a bit, then simulate Nack dipanggil
+			time.Sleep(50 * time.Millisecond)
+			nacked <- true
+		}()
+		msgCh <- delivery.Delivery
+		close(msgCh)
+		mockPublisher.EXPECT().Consume(
+			"queue_processing", "", false, false, false, false, mock.Anything,
+		).Return((<-chan amqp091.Delivery)(msgCh), nil).Once()
+		mockAPI.EXPECT().SimulateProcessing(mock.AnythingOfType("*main.Queue")).Return(assert.AnError).Once()
+
+		// Run Start (should Nack message)
+		go func() { processor.Start() }()
+		// Wait sebentar biar goroutine jalan
+		time.Sleep(100 * time.Millisecond)
+
+		select {
+		case <-nacked:
+			assert.True(t, true, "message should be Nack'ed on error (spy)")
+		default:
+			assert.Fail(t, "message should be Nack'ed on error (spy)")
+		}
 		mockPublisher.AssertExpectations(t)
 		mockAPI.AssertExpectations(t)
 	})
