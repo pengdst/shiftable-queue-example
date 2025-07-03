@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -21,9 +22,32 @@ func TestLoggerHandler(t *testing.T) {
 }
 
 func TestRecoverHandler(t *testing.T) {
+	t.Run("POSITIVE-Panic", func(t *testing.T) {
+		h := recoverHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			panic("blub")
+		}))
+		req := httptest.NewRequest("GET", "/", nil)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+	})
 	t.Run("POSITIVE-NoPanic", func(t *testing.T) {
 		h := recoverHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
+		}))
+		req := httptest.NewRequest("GET", "/", nil)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+	t.Run("NEGATIVE-ErrAbortHandler", func(t *testing.T) {
+		defer func() {
+			if err := recover(); err != http.ErrAbortHandler {
+				t.Errorf("recover panic is not ErrAbortHandler: %v", err)
+			}
+		}()
+		h := recoverHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			panic(http.ErrAbortHandler)
 		}))
 		req := httptest.NewRequest("GET", "/", nil)
 		w := httptest.NewRecorder()
@@ -102,5 +126,50 @@ func TestRealIPHandler(t *testing.T) {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusOK, w.Code)
+	})
+}
+
+func Test_formatReqBody(t *testing.T) {
+	t.Run("POSITIVE-ValidJSON_ReturnJSON", func(t *testing.T) {
+		result := formatReqBody(&http.Request{}, []byte(`{"yolo": 1}`))
+
+		assert.Equal(t, `{"yolo":1}`, result)
+	})
+	t.Run("NEGATIVE-StringValue_ReturnValue", func(t *testing.T) {
+		result := formatReqBody(&http.Request{}, []byte("yolo"))
+
+		assert.Equal(t, "yolo", result)
+	})
+}
+
+func Test_logSeverity(t *testing.T) {
+	t.Run("POSITIVE-4xx-5xx_ReturnErrorLevel", func(t *testing.T) {
+		for httpCode := 400; httpCode < 600; httpCode++ {
+			result := logSeverity(httpCode)
+
+			assert.Equal(t, zerolog.ErrorLevel, result)
+		}
+
+	})
+	t.Run("POSITIVE-3xx_ReturnWarnLevel", func(t *testing.T) {
+		for httpCode := 300; httpCode < 400; httpCode++ {
+			result := logSeverity(httpCode)
+
+			assert.Equal(t, zerolog.WarnLevel, result)
+		}
+	})
+	t.Run("POSITIVE-2xx_ReturnWarnLevel", func(t *testing.T) {
+		for httpCode := 200; httpCode < 300; httpCode++ {
+			result := logSeverity(httpCode)
+
+			assert.Equal(t, zerolog.InfoLevel, result)
+		}
+	})
+	t.Run("POSITIVE-1xx_ReturnWarnLevel", func(t *testing.T) {
+		for httpCode := 100; httpCode < 200; httpCode++ {
+			result := logSeverity(httpCode)
+
+			assert.Equal(t, zerolog.DebugLevel, result)
+		}
 	})
 }
