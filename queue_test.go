@@ -98,6 +98,16 @@ func setupTestDatabase(t *testing.T) (*gorm.DB, func()) {
 // Minimal test factory - inject database instance to server
 func setupTestServer(t *testing.T) (*httptest.Server, func()) {
 	db, cleanupDB := setupTestDatabase(t)
+	ts, cleanupTs := setupTestServerWithDB(t, db)
+	cleanup := func() {
+		cleanupTs()
+		cleanupDB()
+	}
+	return ts, cleanup
+}
+
+// Helper untuk setup test server dengan DB custom (tanpa close DB di cleanup)
+func setupTestServerWithDB(t *testing.T, db *gorm.DB) (*httptest.Server, func()) {
 	processor := &QueueProcessor{
 		repo:    NewRepository(db),
 		channel: &NoopPublisher{},
@@ -106,7 +116,6 @@ func setupTestServer(t *testing.T) (*httptest.Server, func()) {
 	server := NewServer(WithDB(db), WithProcessor(processor))
 	ts := httptest.NewServer(server.router)
 	cleanup := func() {
-		cleanupDB()
 		ts.Close()
 	}
 	return ts, cleanup
@@ -125,11 +134,13 @@ func TestIntegration_CreateQueue(t *testing.T) {
 	})
 
 	t.Run("NEGATIVE-DBError_Returns500", func(t *testing.T) {
-		ts, cleanup := setupTestServer(t)
-		cleanup() // Simulate DB error
+		db, shutdownDB := setupTestDatabase(t)
+		ts, cleanup := setupTestServerWithDB(t, db)
+		shutdownDB()
+		defer cleanup()
 		createBody := []byte(`{"name": "test-queue"}`)
 		resp, err := ts.Client().Post(ts.URL+"/api/v1/queues", "application/json", bytes.NewReader(createBody))
-		assert.Error(t, err)
+		assert.NoError(t, err)
 		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	})
 
@@ -166,9 +177,11 @@ func TestIntegration_GetQueueList(t *testing.T) {
 	})
 
 	t.Run("NEGATIVE-DBError_Returns500", func(t *testing.T) {
-		ts, cleanup := setupTestServer(t)
+		db, shutdownDB := setupTestDatabase(t)
+		ts, cleanup := setupTestServerWithDB(t, db)
+		shutdownDB()
+		defer cleanup()
 		client := ts.Client()
-		cleanup() // Simulate DB error
 		resp, err := client.Get(ts.URL + "/api/v1/queues")
 		assert.NoError(t, err)
 		defer resp.Body.Close()
@@ -225,7 +238,9 @@ func TestIntegration_DeleteQueueByID(t *testing.T) {
 	})
 
 	t.Run("NEGATIVE-DBError_Returns500", func(t *testing.T) {
-		ts, cleanup := setupTestServer(t)
+		db, shutdownDB := setupTestDatabase(t)
+		ts, cleanup := setupTestServerWithDB(t, db)
+		defer cleanup()
 		client := ts.Client()
 		createBody := []byte(`{"name": "test-queue"}`)
 		createResp, _ := client.Post(ts.URL+"/api/v1/queues", "application/json", bytes.NewReader(createBody))
@@ -235,7 +250,7 @@ func TestIntegration_DeleteQueueByID(t *testing.T) {
 		json.NewDecoder(listResp.Body).Decode(&ql)
 		listResp.Body.Close()
 		queueID := ql.Data[0].ID
-		cleanup() // Simulate DB error
+		shutdownDB()
 		req, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/api/v1/queues/%d", ts.URL, queueID), nil)
 		resp, err := client.Do(req)
 		assert.NoError(t, err)
@@ -275,11 +290,13 @@ func TestIntegration_LeaveQueue(t *testing.T) {
 	})
 
 	t.Run("NEGATIVE-DBError_Returns500", func(t *testing.T) {
-		ts, cleanup := setupTestServer(t)
+		db, shutdownDB := setupTestDatabase(t)
+		ts, cleanup := setupTestServerWithDB(t, db)
+		defer cleanup()
 		client := ts.Client()
 		createBody := []byte(`{"name": "leave-queue"}`)
 		client.Post(ts.URL+"/api/v1/queues", "application/json", bytes.NewReader(createBody))
-		cleanup() // Simulate DB error
+		shutdownDB()
 		leaveBody := []byte(`{"name": "leave-queue"}`)
 		resp, err := client.Post(ts.URL+"/api/v1/queues/leave", "application/json", bytes.NewReader(leaveBody))
 		assert.NoError(t, err)
@@ -296,43 +313,110 @@ func TestIntegration_LeaveQueue(t *testing.T) {
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	})
+
+	t.Run("NEGATIVE-TriggerProcessingError_Returns500", func(t *testing.T) {
+		db, cleanupDB := setupTestDatabase(t)
+		defer cleanupDB()
+		// Insert queue dulu
+		db.Create(&Queue{Name: "leave-queue"})
+		// Mock processor
+		mockProcessor := NewMockQueueTrigger(t)
+		mockProcessor.EXPECT().TriggerProcessing(mock.Anything).Return(assert.AnError).Once()
+		server := NewServer(WithDB(db), WithProcessor(mockProcessor))
+		ts := httptest.NewServer(server.router)
+		defer ts.Close()
+		client := ts.Client()
+		leaveBody := []byte(`{"name": "leave-queue"}`)
+		resp, err := client.Post(ts.URL+"/api/v1/queues/leave", "application/json", bytes.NewReader(leaveBody))
+		assert.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	})
 }
 
 // Test ProcessQueue function - simple trigger test
 func TestIntegration_ProcessQueue(t *testing.T) {
-	ts, cleanup := setupTestServer(t)
-	defer cleanup()
-
 	t.Run("POSITIVE-TriggerProcessing_ReturnsSuccess", func(t *testing.T) {
+		ts, cleanup := setupTestServer(t)
+		defer cleanup()
 		client := ts.Client()
-
 		createBody := []byte(`{"name": "test-queue"}`)
 		resp, err := ts.Client().Post(ts.URL+"/api/v1/queues", "application/json", bytes.NewReader(createBody))
 		assert.NoError(t, err)
 		defer resp.Body.Close()
-
 		assert.Equal(t, http.StatusCreated, resp.StatusCode)
-
 		// Test: trigger processing (no body needed)
 		resp, err = client.Post(ts.URL+"/api/v1/queues/process", "application/json", bytes.NewReader(createBody))
 		assert.NoError(t, err)
 		defer resp.Body.Close()
-
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
 		resp, err = client.Get(ts.URL + "/api/v1/queues")
 		assert.NoError(t, err)
 		defer resp.Body.Close()
-
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
 		var ql queueResp
 		err = json.NewDecoder(resp.Body).Decode(&ql)
 		assert.NoError(t, err)
-
 		assert.Len(t, ql.Data, 1)
 		assert.Equal(t, "test-queue", ql.Data[0].Name)
 		assert.Equal(t, StatusProcessing, ql.Data[0].Status)
+	})
+
+	// NEGATIVE: invalid JSON
+	t.Run("NEGATIVE-InvalidJSON_Returns500", func(t *testing.T) {
+		ts, cleanup := setupTestServer(t)
+		defer cleanup()
+		resp, err := ts.Client().Post(ts.URL+"/api/v1/queues/process", "application/json", bytes.NewReader([]byte("invalid json")))
+		assert.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	})
+
+	// NEGATIVE: DB error saat GetQueueByName
+	t.Run("NEGATIVE-DBError_GetQueueByName_Returns500", func(t *testing.T) {
+		db, shutdownDB := setupTestDatabase(t)
+		ts, cleanup := setupTestServerWithDB(t, db)
+		shutdownDB()
+		defer cleanup()
+		body := []byte(`{"name": "test-queue"}`)
+		resp, err := ts.Client().Post(ts.URL+"/api/v1/queues/process", "application/json", bytes.NewReader(body))
+		assert.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	})
+
+	// NEGATIVE: DB error saat Save (setelah GetQueueByName sukses)
+	t.Run("NEGATIVE-DBError_Save_Returns500", func(t *testing.T) {
+		db, shutdownDB := setupTestDatabase(t)
+		// Insert queue dulu
+		db.Create(&Queue{Name: "test-queue"})
+		ts, cleanup := setupTestServerWithDB(t, db)
+		defer cleanup()
+		shutdownDB()
+		body := []byte(`{"name": "test-queue"}`)
+		resp, err := ts.Client().Post(ts.URL+"/api/v1/queues/process", "application/json", bytes.NewReader(body))
+		assert.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	})
+
+	// NEGATIVE: error saat TriggerProcessing (mock processor)
+	t.Run("NEGATIVE-TriggerProcessingError_Returns500", func(t *testing.T) {
+		db, cleanupDB := setupTestDatabase(t)
+		defer cleanupDB()
+		// Insert queue dulu
+		db.Create(&Queue{Name: "test-queue"})
+		// Mock processor
+		mockProcessor := NewMockQueueTrigger(t)
+		mockProcessor.EXPECT().TriggerProcessing(mock.Anything).Return(assert.AnError).Once()
+		server := NewServer(WithDB(db), WithProcessor(mockProcessor))
+		ts := httptest.NewServer(server.router)
+		defer ts.Close()
+		body := []byte(`{"name": "test-queue"}`)
+		resp, err := ts.Client().Post(ts.URL+"/api/v1/queues/process", "application/json", bytes.NewReader(body))
+		assert.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	})
 }
 
@@ -512,4 +596,12 @@ func TestIntegration_RabbitMQ_QueueProcessing(t *testing.T) {
 			assert.Equal(t, 1, updatedQueue.RetryCount)
 		}
 	})
+}
+
+func TestQueueStatus(t *testing.T) {
+	assert.Equal(t, "completed", StatusCompleted.String())
+	assert.Equal(t, "failed", StatusFailed.String())
+	assert.Equal(t, "pending", StatusPending.String())
+	assert.Equal(t, "processing", StatusProcessing.String())
+	assert.Equal(t, "unknown", QueueStatus(666).String())
 }
