@@ -1,0 +1,9 @@
+module: "shiftable-queue-example"
+ignore_rules:
+  - "main.go"
+  - "server.go"
+  - "gorm.go"
+  - "middleware.go.*chainMiddleware"
+  - "middleware.go.*MarshalZerologObject"
+  - "processor.go.*NewQueueProcessor"
+  - "processor.go.*SimulateProcessing" 

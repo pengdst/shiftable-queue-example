@@ -3,6 +3,7 @@ module shiftable-queue
 go 1.24.0
 
 tool github.com/vektra/mockery/v3
+tool github.com/wimspaargaren/go-cover-ignore
 
 require (
 	github.com/caarlos0/env/v11 v11.3.1
@@ -19,6 +20,7 @@ require (
 
 require (
 	github.com/brunoga/deep v1.2.4 // indirect
+	github.com/caarlos0/env/v9 v9.0.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/fatih/structs v1.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.8.0 // indirect
@@ -51,6 +53,7 @@ require (
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/vektra/mockery/v3 v3.5.0 // indirect
+	github.com/wimspaargaren/go-cover-ignore v1.0.0 // indirect
 	github.com/xeipuuv/gojsonpointer v0.0.0-20180127040702-4e3ac2762d5f // indirect
 	github.com/xeipuuv/gojsonreference v0.0.0-20180127040603-bd5ef7bd5415 // indirect
 	github.com/xeipuuv/gojsonschema v1.2.0 // indirect

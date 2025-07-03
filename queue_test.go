@@ -114,125 +114,188 @@ func setupTestServer(t *testing.T) (*httptest.Server, func()) {
 
 // Test CreateQueue function - main happy path
 func TestIntegration_CreateQueue(t *testing.T) {
-	ts, cleanup := setupTestServer(t)
-	defer cleanup()
+	t.Run("POSITIVE-CreateQueue_ReturnsCreated", func(t *testing.T) {
+		ts, cleanup := setupTestServer(t)
+		defer cleanup()
+		createBody := []byte(`{"name": "test-queue"}`)
+		resp, err := ts.Client().Post(ts.URL+"/api/v1/queues", "application/json", bytes.NewReader(createBody))
+		assert.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusCreated, resp.StatusCode)
+	})
 
-	createBody := []byte(`{"name": "test-queue"}`)
-	resp, err := ts.Client().Post(ts.URL+"/api/v1/queues", "application/json", bytes.NewReader(createBody))
-	assert.NoError(t, err)
-	defer resp.Body.Close()
+	t.Run("NEGATIVE-DBError_Returns500", func(t *testing.T) {
+		ts, cleanup := setupTestServer(t)
+		cleanup() // Simulate DB error
+		createBody := []byte(`{"name": "test-queue"}`)
+		resp, err := ts.Client().Post(ts.URL+"/api/v1/queues", "application/json", bytes.NewReader(createBody))
+		assert.Error(t, err)
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	})
 
-	assert.Equal(t, http.StatusCreated, resp.StatusCode)
+	t.Run("NEGATIVE-InvalidJSON_ReturnsError", func(t *testing.T) {
+		ts, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		resp, err := ts.Client().Post(ts.URL+"/api/v1/queues", "application/json", bytes.NewReader([]byte("invalid json")))
+		assert.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	})
 }
 
 // Test GetQueueList function - all scenarios
 func TestIntegration_GetQueueList(t *testing.T) {
-	ts, cleanup := setupTestServer(t)
-	defer cleanup()
-
 	t.Run("POSITIVE-BasicRetrieval_ReturnsCreatedQueue", func(t *testing.T) {
+		ts, cleanup := setupTestServer(t)
+		defer cleanup()
 		client := ts.Client()
-
-		// Setup: create a queue first
 		createBody := []byte(`{"name": "test-queue"}`)
 		createResp, _ := client.Post(ts.URL+"/api/v1/queues", "application/json", bytes.NewReader(createBody))
 		createResp.Body.Close()
-
-		// Test: get list
 		resp, err := client.Get(ts.URL + "/api/v1/queues")
 		assert.NoError(t, err)
 		defer resp.Body.Close()
-
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
 		var ql queueResp
 		err = json.NewDecoder(resp.Body).Decode(&ql)
 		assert.NoError(t, err)
-
 		assert.Len(t, ql.Data, 1)
 		assert.Equal(t, "test-queue", ql.Data[0].Name)
+	})
+
+	t.Run("NEGATIVE-DBError_Returns500", func(t *testing.T) {
+		ts, cleanup := setupTestServer(t)
+		client := ts.Client()
+		cleanup() // Simulate DB error
+		resp, err := client.Get(ts.URL + "/api/v1/queues")
+		assert.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	})
 }
 
 // Test DeleteQueueByID function - main happy path
 func TestIntegration_DeleteQueueByID(t *testing.T) {
-	ts, cleanup := setupTestServer(t)
-	defer cleanup()
+	t.Run("POSITIVE-DeleteQueue_ReturnsOK", func(t *testing.T) {
+		ts, cleanup := setupTestServer(t)
+		defer cleanup()
+		client := ts.Client()
+		createBody := []byte(`{"name": "test-queue"}`)
+		createResp, _ := client.Post(ts.URL+"/api/v1/queues", "application/json", bytes.NewReader(createBody))
+		createResp.Body.Close()
+		listResp, _ := client.Get(ts.URL + "/api/v1/queues")
+		var ql queueResp
+		json.NewDecoder(listResp.Body).Decode(&ql)
+		listResp.Body.Close()
+		queueID := ql.Data[0].ID
+		req, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/api/v1/queues/%d", ts.URL, queueID), nil)
+		resp, err := client.Do(req)
+		assert.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		verifyResp, _ := client.Get(ts.URL + "/api/v1/queues")
+		var verifyQl queueResp
+		json.NewDecoder(verifyResp.Body).Decode(&verifyQl)
+		verifyResp.Body.Close()
+		assert.Empty(t, verifyQl.Data)
+	})
 
-	client := ts.Client()
+	t.Run("NEGATIVE-NotFound_Returns500", func(t *testing.T) {
+		ts, cleanup := setupTestServer(t)
+		defer cleanup()
+		client := ts.Client()
+		req, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/api/v1/queues/%d", ts.URL, 99999), nil)
+		resp, err := client.Do(req)
+		assert.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	})
 
-	// Setup: create a queue first
-	createBody := []byte(`{"name": "test-queue"}`)
-	createResp, _ := client.Post(ts.URL+"/api/v1/queues", "application/json", bytes.NewReader(createBody))
-	createResp.Body.Close()
+	t.Run("NEGATIVE-InvalidID_Returns500", func(t *testing.T) {
+		ts, cleanup := setupTestServer(t)
+		defer cleanup()
+		client := ts.Client()
+		req, _ := http.NewRequest("DELETE", ts.URL+"/api/v1/queues/invalid", nil)
+		resp, err := client.Do(req)
+		assert.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	})
 
-	// Get queue ID
-	listResp, _ := client.Get(ts.URL + "/api/v1/queues")
-	var ql queueResp
-	json.NewDecoder(listResp.Body).Decode(&ql)
-	listResp.Body.Close()
-	queueID := ql.Data[0].ID
-
-	// Test: delete queue
-	req, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/api/v1/queues/%d", ts.URL, queueID), nil)
-	resp, err := client.Do(req)
-	assert.NoError(t, err)
-	defer resp.Body.Close()
-
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-	// Verify: queue should be deleted
-	verifyResp, _ := client.Get(ts.URL + "/api/v1/queues")
-	var verifyQl queueResp
-	json.NewDecoder(verifyResp.Body).Decode(&verifyQl)
-	verifyResp.Body.Close()
-
-	assert.Empty(t, verifyQl.Data)
+	t.Run("NEGATIVE-DBError_Returns500", func(t *testing.T) {
+		ts, cleanup := setupTestServer(t)
+		client := ts.Client()
+		createBody := []byte(`{"name": "test-queue"}`)
+		createResp, _ := client.Post(ts.URL+"/api/v1/queues", "application/json", bytes.NewReader(createBody))
+		createResp.Body.Close()
+		listResp, _ := client.Get(ts.URL + "/api/v1/queues")
+		var ql queueResp
+		json.NewDecoder(listResp.Body).Decode(&ql)
+		listResp.Body.Close()
+		queueID := ql.Data[0].ID
+		cleanup() // Simulate DB error
+		req, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/api/v1/queues/%d", ts.URL, queueID), nil)
+		resp, err := client.Do(req)
+		assert.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	})
 }
 
 func TestIntegration_LeaveQueue(t *testing.T) {
-	ts, cleanup := setupTestServer(t)
-	defer cleanup()
-	client := ts.Client()
+	t.Run("POSITIVE-LeaveQueue_ReturnsOK", func(t *testing.T) {
+		ts, cleanup := setupTestServer(t)
+		defer cleanup()
+		client := ts.Client()
+		createBody := []byte(`{"name": "leave-queue"}`)
+		client.Post(ts.URL+"/api/v1/queues", "application/json", bytes.NewReader(createBody))
+		leaveBody := []byte(`{"name": "leave-queue"}`)
+		resp, err := client.Post(ts.URL+"/api/v1/queues/leave", "application/json", bytes.NewReader(leaveBody))
+		assert.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		verifyResp, _ := client.Get(ts.URL + "/api/v1/queues")
+		var verifyQl queueResp
+		json.NewDecoder(verifyResp.Body).Decode(&verifyQl)
+		verifyResp.Body.Close()
+		assert.Empty(t, verifyQl.Data)
+	})
 
-	// Create a queue
-	createBody := []byte(`{"name": "leave-queue"}`)
-	resp, err := client.Post(ts.URL+"/api/v1/queues", "application/json", bytes.NewReader(createBody))
-	assert.NoError(t, err)
-	resp.Body.Close()
+	t.Run("NEGATIVE-NotFound_ReturnsNon200", func(t *testing.T) {
+		ts, cleanup := setupTestServer(t)
+		defer cleanup()
+		client := ts.Client()
+		leaveBody := []byte(`{"name": "not-exist"}`)
+		resp, err := client.Post(ts.URL+"/api/v1/queues/leave", "application/json", bytes.NewReader(leaveBody))
+		assert.NoError(t, err)
+		defer resp.Body.Close()
+		assert.NotEqual(t, http.StatusOK, resp.StatusCode)
+	})
 
-	// Leave (delete) the queue by name
-	leaveBody := []byte(`{"name": "leave-queue"}`)
-	resp, err = client.Post(ts.URL+"/api/v1/queues/leave", "application/json", bytes.NewReader(leaveBody))
-	assert.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	t.Run("NEGATIVE-DBError_Returns500", func(t *testing.T) {
+		ts, cleanup := setupTestServer(t)
+		client := ts.Client()
+		createBody := []byte(`{"name": "leave-queue"}`)
+		client.Post(ts.URL+"/api/v1/queues", "application/json", bytes.NewReader(createBody))
+		cleanup() // Simulate DB error
+		leaveBody := []byte(`{"name": "leave-queue"}`)
+		resp, err := client.Post(ts.URL+"/api/v1/queues/leave", "application/json", bytes.NewReader(leaveBody))
+		assert.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	})
 
-	// Verify: queue should be deleted
-	verifyResp, _ := client.Get(ts.URL + "/api/v1/queues")
-	var verifyQl queueResp
-	json.NewDecoder(verifyResp.Body).Decode(&verifyQl)
-	verifyResp.Body.Close()
-	assert.Empty(t, verifyQl.Data)
-
-	// Try to leave a non-existent queue
-	leaveBody = []byte(`{"name": "not-exist"}`)
-	resp, err = client.Post(ts.URL+"/api/v1/queues/leave", "application/json", bytes.NewReader(leaveBody))
-	assert.NoError(t, err)
-	defer resp.Body.Close()
-	assert.NotEqual(t, http.StatusOK, resp.StatusCode)
-}
-
-// Test CreateQueue error handling - primary error path
-func TestIntegration_CreateQueue_InvalidJSON(t *testing.T) {
-	ts, cleanup := setupTestServer(t)
-	defer cleanup()
-
-	resp, err := ts.Client().Post(ts.URL+"/api/v1/queues", "application/json", bytes.NewReader([]byte("invalid json")))
-	assert.NoError(t, err)
-	defer resp.Body.Close()
-
-	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	t.Run("NEGATIVE-InvalidJSON_Returns500", func(t *testing.T) {
+		ts, cleanup := setupTestServer(t)
+		defer cleanup()
+		client := ts.Client()
+		resp, err := client.Post(ts.URL+"/api/v1/queues/leave", "application/json", bytes.NewReader([]byte("invalid json")))
+		assert.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	})
 }
 
 // Test ProcessQueue function - simple trigger test

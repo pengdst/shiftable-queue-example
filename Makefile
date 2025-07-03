@@ -25,7 +25,7 @@ build:
 # Run tests with coverage
 test:
 	go test -timeout=3s -v -race -coverprofile=coverage.out ./...
-	GO_COVER_IGNORE_SPEC_PATH=.coverage-ignore.yaml GO_COVER_IGNORE_COVER_PROFILE_PATH=coverage.out go-cover-ignore
+	GO_COVER_IGNORE_SPEC_PATH=.coverage-ignore.yaml GO_COVER_IGNORE_COVER_PROFILE_PATH=coverage.out go tool go-cover-ignore
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Final coverage:"; go tool cover -func=coverage.out | grep total
 
