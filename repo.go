@@ -90,3 +90,19 @@ func (r *Repository) GetEligibleQueues(ctx context.Context) ([]Queue, error) {
 
 	return queues, nil
 }
+
+func (r *Repository) HasRemainingQueues(ctx context.Context) (bool, error) {
+	var count int64
+
+	err := r.db.WithContext(ctx).
+		Model(&Queue{}).
+		Where("status IN ?", []QueueStatus{StatusPending, StatusFailed}).
+		Limit(1).
+		Count(&count).Error
+
+	if err != nil {
+		return false, err
+	}
+
+	return count > 0, nil
+}

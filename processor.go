@@ -166,19 +166,19 @@ func (p *QueueProcessor) ProcessEligibleQueue(ctx context.Context) error {
 	}
 
 	// Check if there are more eligible queues to process
-	remainingQueues, err := p.repo.GetEligibleQueues(ctx)
+	exist, err := p.repo.HasRemainingQueues(ctx)
 	if err != nil {
 		log.Error().Msgf("failed to check remaining queues: %s", err.Error())
 		return err
 	}
 
 	// If there are more queues, trigger RabbitMQ again for chain processing
-	if len(remainingQueues) <= 0 {
+	if !exist {
 		log.Info().Msg("no more eligible queues, processing complete")
 		return nil
 	}
 
-	log.Info().Msgf("found %d more eligible queues, triggering next processing", len(remainingQueues))
+	log.Info().Msg("found more eligible queues, triggering next processing")
 	if err := p.triggerNextProcessing(ctx); err != nil {
 		log.Error().Msgf("failed to trigger next processing: %s", err.Error())
 	}
