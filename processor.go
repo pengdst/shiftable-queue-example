@@ -13,6 +13,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const QueueProcessingName = "queue_processing"
+
 type RestAPI interface {
 	SimulateProcessing(*Queue) error
 }
@@ -48,7 +50,7 @@ func NewQueueProcessor(cfg *Config, db *gorm.DB, api RestAPI) *QueueProcessor {
 
 	// Declare queue
 	_, err = channel.QueueDeclare(
-		"queue_processing", // name
+		QueueProcessingName, // name
 		true,               // durable
 		false,              // delete when unused
 		false,              // exclusive
@@ -72,7 +74,7 @@ func (p *QueueProcessor) Start() {
 
 	// Start consuming messages from RabbitMQ
 	msgs, err := p.channel.Consume(
-		"queue_processing", // queue
+		QueueProcessingName, // queue
 		"",                 // consumer
 		false,              // auto-ack
 		false,              // exclusive
@@ -118,7 +120,7 @@ func (p *QueueProcessor) TriggerProcessing(ctx context.Context) error {
 	return p.channel.PublishWithContext(
 		ctx,
 		"",                 // exchange
-		"queue_processing", // routing key
+		QueueProcessingName, // routing key
 		false,              // mandatory
 		false,              // immediate
 		amqp091.Publishing{
@@ -196,7 +198,7 @@ func (p *QueueProcessor) triggerNextProcessing(ctx context.Context) error {
 	return p.channel.PublishWithContext(
 		ctx,
 		"",                 // exchange
-		"queue_processing", // routing key
+		QueueProcessingName, // routing key
 		false,              // mandatory
 		false,              // immediate
 		amqp091.Publishing{

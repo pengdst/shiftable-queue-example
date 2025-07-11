@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -604,4 +605,36 @@ func TestQueueStatus(t *testing.T) {
 	assert.Equal(t, "pending", StatusPending.String())
 	assert.Equal(t, "processing", StatusProcessing.String())
 	assert.Equal(t, "unknown", QueueStatus(666).String())
+}
+
+func TestWriteJSON_ErrorHandling(t *testing.T) {
+	t.Run("NEGATIVE-MarshalError_Returns500AndLogs", func(t *testing.T) {
+		// Create a mock HTTP response recorder
+		rr := httptest.NewRecorder()
+
+		// Create a data structure that cannot be marshaled to JSON (e.g., a channel)
+		unmarshalableData := make(chan int)
+
+		// Capture logs
+		var buf bytes.Buffer
+		log.Logger = log.Output(&buf)
+		defer func() {
+			log.Logger = log.Output(os.Stderr) // Reset log output
+		}()
+
+		// Call WriteJSON with the unmarshalable data
+		WriteJSON(rr, http.StatusOK, unmarshalableData)
+
+		// Assertions
+		assert.Equal(t, http.StatusInternalServerError, rr.Code)
+		assert.Equal(t, "application/json", rr.Header().Get("Content-Type"))
+
+		// Verify response body
+		expectedBody := `{"error":"internal server error"}`
+		assert.JSONEq(t, expectedBody, rr.Body.String())
+
+		// Verify log output
+		assert.Contains(t, buf.String(), "failed to marshal JSON")
+		assert.Contains(t, buf.String(), "error") // Check for error level in log
+	})
 }

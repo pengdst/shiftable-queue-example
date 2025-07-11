@@ -117,11 +117,18 @@ func (h *httpHandler) DeleteQueueByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func WriteJSON(w http.ResponseWriter, status int, data any) {
-	w.WriteHeader(status)
-	byte, _ := json.Marshal(map[string]any{
+	w.Header().Set("Content-Type", "application/json")
+	b, err := json.Marshal(map[string]any{
 		"data": data,
 	})
-	w.Write(byte)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to marshal JSON")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":"internal server error"}`))
+		return
+	}
+	w.WriteHeader(status)
+	w.Write(b)
 }
 
 func (h *httpHandler) ProcessQueue(w http.ResponseWriter, r *http.Request) {
@@ -193,9 +200,16 @@ func (h *httpHandler) LeaveQueue(w http.ResponseWriter, r *http.Request) {
 }
 
 func WriteJSONError(w http.ResponseWriter, err error) {
-	w.WriteHeader(http.StatusInternalServerError)
-	byte, _ := json.Marshal(map[string]any{
+	w.Header().Set("Content-Type", "application/json")
+	b, marshalErr := json.Marshal(map[string]any{
 		"error": err.Error(),
 	})
-	w.Write(byte)
+	if marshalErr != nil {
+		log.Error().Err(marshalErr).Msg("failed to marshal JSON for error response")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":"internal server error"}`))
+		return
+	}
+	w.WriteHeader(http.StatusInternalServerError)
+	w.Write(b)
 }
