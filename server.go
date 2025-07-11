@@ -28,8 +28,9 @@ func WithProcessor(processor QueueTrigger) ServerOption {
 	return func(s *Server) { s.processor = processor }
 }
 
-func NewServer(opts ...ServerOption) *Server {
+func NewServer(opts ...ServerOption) (*Server, error) {
 	s := &Server{}
+	var err error // Declare err here
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -42,7 +43,10 @@ func NewServer(opts ...ServerOption) *Server {
 	}
 	Migrate(s.db)
 	if s.processor == nil {
-		s.processor = NewQueueProcessor(s.cfg, s.db, &FakeAPI{})
+		s.processor, err = NewQueueProcessor(s.cfg, s.db, &FakeAPI{})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create queue processor: %w", err)
+		}
 	}
 
 	repo := NewRepository(s.db)
@@ -56,7 +60,7 @@ func NewServer(opts ...ServerOption) *Server {
 	r.HandleFunc("POST /api/v1/queues/leave", handler.LeaveQueue)
 
 	s.router = r
-	return s
+	return s, nil
 }
 
 type Server struct {
@@ -68,7 +72,7 @@ type Server struct {
 
 // Run method of the Server struct runs the HTTP server on the specified port. It initializes
 // a new HTTP server instance with the specified port and the server's router.
-func (s *Server) Run(port int) {
+func (s *Server) Run(port int) error {
 	addr := fmt.Sprintf(":%d", port)
 
 	h := chainMiddleware(
@@ -100,19 +104,19 @@ func (s *Server) Run(port int) {
 
 		httpSrv.SetKeepAlivesEnabled(false)
 		if err := httpSrv.Shutdown(ctx); err != nil {
-			log.Fatal().Err(err).Msg("could not gracefully shutdown the server")
+			log.Error().Err(fmt.Errorf("could not gracefully shutdown the server: %w", err)).Msg("server shutdown error")
 		}
 		close(done)
 	}()
 
 	log.Info().Msgf("server serving on port %d", port)
 	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal().Err(err).Msgf("could not listen on %s", addr)
+		return fmt.Errorf("could not listen on %s: %w", addr, err)
 	}
 
 	<-done
-	log.Info().Msg("server stopped")
-
+		log.Info().Msg("server stopped")
+	return nil
 }
 
 func rootHandler(w http.ResponseWriter, r *http.Request) {

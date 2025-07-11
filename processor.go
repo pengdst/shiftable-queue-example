@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"time"
 
@@ -36,16 +37,16 @@ type QueueProcessor struct {
 	api     RestAPI
 }
 
-func NewQueueProcessor(cfg *Config, db *gorm.DB, api RestAPI) *QueueProcessor {
+func NewQueueProcessor(cfg *Config, db *gorm.DB, api RestAPI) (*QueueProcessor, error) {
 	// Connect to RabbitMQ
 	conn, err := amqp091.Dial(cfg.RabbitMQURL)
 	if err != nil {
-		log.Fatal().Err(err).Msg("failed to connect to RabbitMQ")
+		return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
 	}
 
 	channel, err := conn.Channel()
 	if err != nil {
-		log.Fatal().Err(err).Msg("failed to open RabbitMQ channel")
+		return nil, fmt.Errorf("failed to open RabbitMQ channel: %w", err)
 	}
 
 	// Declare queue
@@ -58,7 +59,7 @@ func NewQueueProcessor(cfg *Config, db *gorm.DB, api RestAPI) *QueueProcessor {
 		nil,                // arguments
 	)
 	if err != nil {
-		log.Fatal().Err(err).Msg("failed to declare RabbitMQ queue")
+		return nil, fmt.Errorf("failed to declare RabbitMQ queue: %w", err)
 	}
 
 	return &QueueProcessor{
@@ -66,10 +67,10 @@ func NewQueueProcessor(cfg *Config, db *gorm.DB, api RestAPI) *QueueProcessor {
 		conn:    conn,
 		channel: channel,
 		api:     api,
-	}
+	}, nil
 }
 
-func (p *QueueProcessor) Start() {
+func (p *QueueProcessor) Start() error {
 	log.Info().Msg("Queue processor started")
 
 	// Start consuming messages from RabbitMQ
@@ -83,7 +84,7 @@ func (p *QueueProcessor) Start() {
 		nil,                // args
 	)
 	if err != nil {
-		log.Fatal().Err(err).Msg("failed to register RabbitMQ consumer")
+		return fmt.Errorf("failed to register RabbitMQ consumer: %w", err)
 	}
 
 	log.Info().Msg("RabbitMQ consumer started, waiting for messages...")
@@ -98,6 +99,7 @@ func (p *QueueProcessor) Start() {
 			d.Ack(false)
 		}
 	}
+	return nil
 }
 
 func (p *QueueProcessor) Stop() {

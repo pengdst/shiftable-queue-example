@@ -114,7 +114,8 @@ func setupTestServerWithDB(t *testing.T, db *gorm.DB) (*httptest.Server, func())
 		channel: &NoopPublisher{},
 		api:     &FakeAPI{},
 	}
-	server := NewServer(WithDB(db), WithProcessor(processor))
+	server, err := NewServer(WithDB(db), WithProcessor(processor))
+	assert.NoError(t, err)
 	ts := httptest.NewServer(server.router)
 	cleanup := func() {
 		ts.Close()
@@ -323,7 +324,8 @@ func TestIntegration_LeaveQueue(t *testing.T) {
 		// Mock processor
 		mockProcessor := NewMockQueueTrigger(t)
 		mockProcessor.EXPECT().TriggerProcessing(mock.Anything).Return(assert.AnError).Once()
-		server := NewServer(WithDB(db), WithProcessor(mockProcessor))
+		server, err := NewServer(WithDB(db), WithProcessor(mockProcessor))
+		assert.NoError(t, err)
 		ts := httptest.NewServer(server.router)
 		defer ts.Close()
 		client := ts.Client()
@@ -410,7 +412,8 @@ func TestIntegration_ProcessQueue(t *testing.T) {
 		// Mock processor
 		mockProcessor := NewMockQueueTrigger(t)
 		mockProcessor.EXPECT().TriggerProcessing(mock.Anything).Return(assert.AnError).Once()
-		server := NewServer(WithDB(db), WithProcessor(mockProcessor))
+		server, err := NewServer(WithDB(db), WithProcessor(mockProcessor))
+		assert.NoError(t, err)
 		ts := httptest.NewServer(server.router)
 		defer ts.Close()
 		body := []byte(`{"name": "test-queue"}`)
@@ -554,7 +557,8 @@ func TestIntegration_RabbitMQ_QueueProcessing(t *testing.T) {
 
 		// Create processor and process one message manually
 		apiMock := NewMockRestAPI(t)
-		processor := NewQueueProcessor(cfg, db, apiMock)
+		processor, err := NewQueueProcessor(cfg, db, apiMock)
+		assert.NoError(t, err)
 		apiMock.EXPECT().SimulateProcessing(mock.Anything).Return(nil).Once()
 
 		// Simulate message consumption and processing

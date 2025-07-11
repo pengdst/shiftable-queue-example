@@ -32,12 +32,24 @@ func main() {
 
 func runServer() {
 	log.Info().Msg("Starting HTTP server...")
-	server := NewServer()
-	server.Run(8080)
+	server, err := NewServer()
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to create server")
+	}
+
+	if err := server.Run(8080); err != nil {
+		log.Fatal().Err(err).Msg("failed to run server")
+	}
 }
 
 func runProcessor(cfg *Config, db *gorm.DB) {
 	log.Info().Msg("Starting queue processor...")
-	processor := NewQueueProcessor(cfg, db, &FakeAPI{})
-	processor.Start()
+	processor, err := NewQueueProcessor(cfg, db, &FakeAPI{})
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to create queue processor")
+	}
+
+	if err := processor.Start(); err != nil {
+		log.Fatal().Err(err).Msg("failed to start queue processor")
+	}
 }
