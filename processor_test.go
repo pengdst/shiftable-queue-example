@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,7 +25,13 @@ func setupProcessorTest(t *testing.T) (*QueueProcessor, *MockPublisher, *MockClo
 		channel: mockPublisher,
 		api:     mockAPI,
 	}
+
+	// Mock Close() for cleanup to prevent unexpected calls
+	mockPublisher.EXPECT().Close().Return(nil).Maybe()
+	mockCloser.EXPECT().Close().Return(nil).Maybe()
+
 	cleanup := func() {
+		processor.Stop()
 		dbCleanup()
 	}
 	return processor, mockPublisher, mockCloser, mockAPI, db, cleanup
@@ -38,7 +45,7 @@ func TestQueueProcessor_ProcessEligibleQueue(t *testing.T) {
 		queue := &Queue{Name: "q-success", Status: StatusPending}
 		_ = repo.Save(context.Background(), queue)
 
-		mockAPI.EXPECT().SimulateProcessing(mock.AnythingOfType("*main.Queue")).Return(nil).Once()
+		mockAPI.EXPECT().SimulateProcessing(mock.Anything).Return(nil).Once()
 
 		err := processor.ProcessEligibleQueue(context.Background())
 		assert.NoError(t, err)
@@ -58,7 +65,7 @@ func TestQueueProcessor_ProcessEligibleQueue(t *testing.T) {
 		_ = repo.Save(context.Background(), queue)
 
 		errFail := assert.AnError
-		mockAPI.EXPECT().SimulateProcessing(mock.AnythingOfType("*main.Queue")).Return(errFail).Once()
+		mockAPI.EXPECT().SimulateProcessing(mock.Anything).Return(errFail).Once()
 
 		err := processor.ProcessEligibleQueue(context.Background())
 		assert.Error(t, err)
@@ -85,13 +92,13 @@ func TestQueueProcessor_ProcessEligibleQueue(t *testing.T) {
 		processor, mockPublisher, _, mockAPI, db, cleanup := setupProcessorTest(t)
 		defer cleanup()
 		repo := NewRepository(db)
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			_ = repo.Save(context.Background(), &Queue{Name: fmt.Sprintf("q-%d", i), Status: StatusPending})
 		}
-		mockAPI.EXPECT().SimulateProcessing(mock.AnythingOfType("*main.Queue")).Return(nil).Times(3)
+		mockAPI.EXPECT().SimulateProcessing(mock.Anything).Return(nil).Times(3)
 		mockPublisher.EXPECT().PublishWithContext(mock.Anything, "", "queue_processing", false, false, mock.Anything).Return(nil).Maybe()
 
-		for i := 0; i < 3; i++ {
+		for range 3 {
 			err := processor.ProcessEligibleQueue(context.Background())
 			assert.NoError(t, err)
 		}
@@ -205,15 +212,54 @@ func TestQueueProcessor_TriggerProcessing(t *testing.T) {
 }
 
 func TestQueueProcessor_Stop(t *testing.T) {
-	processor, mockPublisher, mockCloser, _, _, cleanup := setupProcessorTest(t)
-	defer cleanup()
+	// Re-setup mocks without using the shared setupProcessorTest to avoid
+	// conflicting/duplicate mock expectations on the .Close() method.
+	db, dbCleanup := setupTestDatabase(t)
+	defer dbCleanup()
 
+	mockCloser := NewMockCloser(t)
+	mockPublisher := NewMockPublisher(t)
+	mockAPI := NewMockRestAPI(t)
+	processor := &QueueProcessor{
+		repo:    NewRepository(db),
+		conn:    mockCloser,
+		channel: mockPublisher,
+		api:     mockAPI,
+	}
+
+	// Set clear expectations for this specific test.
 	mockPublisher.EXPECT().Close().Return(nil).Once()
 	mockCloser.EXPECT().Close().Return(nil).Once()
 
+	// Execute the function under test.
 	processor.Stop()
+
+	// Assert that the expectations were met.
 	mockPublisher.AssertExpectations(t)
 	mockCloser.AssertExpectations(t)
+}
+
+// mockAcknowledger implements the amqp091.Acknowledger interface for testing.
+type mockAcknowledger struct {
+	acked  chan bool
+	nacked chan bool
+}
+
+func (a *mockAcknowledger) Ack(tag uint64, multiple bool) error {
+	// In this test, we don't expect Ack to be called, but it's good practice to implement it.
+	// For simplicity, we won't signal anything here.
+	return nil
+}
+
+func (a *mockAcknowledger) Nack(tag uint64, multiple bool, requeue bool) error {
+	// Signal that Nack was called.
+	a.nacked <- true
+	return nil
+}
+
+func (a *mockAcknowledger) Reject(tag uint64, requeue bool) error {
+	// In this test, we don't expect Reject to be called.
+	return nil
 }
 
 func TestQueueProcessor_Start(t *testing.T) {
@@ -233,19 +279,24 @@ func TestQueueProcessor_Start(t *testing.T) {
 		).Return((<-chan amqp091.Delivery)(msgCh), nil).Once()
 
 		// Setup mock SimulateProcessing
-		mockAPI.EXPECT().SimulateProcessing(mock.AnythingOfType("*main.Queue")).Return(nil).Once()
+		mockAPI.EXPECT().SimulateProcessing(mock.Anything).Return(nil).Once()
 		mockPublisher.EXPECT().PublishWithContext(mock.Anything, "", "queue_processing", false, false, mock.Anything).Return(nil).Maybe()
+
+		// Run Start in a goroutine and wait for it to complete
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			processor.Start()
+		}()
 
 		// Insert a dummy message
 		msgCh <- amqp091.Delivery{}
 		close(msgCh)
 
-		// Run Start (should process message)
-		go func() { processor.Start() }()
-		// Wait sebentar biar goroutine jalan
-		time.Sleep(100 * time.Millisecond)
+		wg.Wait() // Wait for the processor to finish
 
-		// Assert efek: status queue berubah jadi Completed
+		// Assert effects: status queue should be Completed
 		var updated Queue
 		_ = db.First(&updated, queue.ID).Error
 		assert.Equal(t, StatusCompleted, updated.Status)
@@ -253,51 +304,54 @@ func TestQueueProcessor_Start(t *testing.T) {
 		mockAPI.AssertExpectations(t)
 	})
 
-	// NEGATIVE: ProcessEligibleQueue return error, message should be Nack'ed
-	// Use custom Delivery mock to assert Nack dipanggil
-	//
-	// Karena amqp091.Delivery tidak bisa di-mock langsung, kita jalankan Start di goroutine,
-	// lalu inject delivery dengan Nack/Ack closure yang set flag (pakai channel + closure)
-	//
 	t.Run("NEGATIVE-ProcessEligibleQueueError_NackMessage", func(t *testing.T) {
-		processor, mockPublisher, _, mockAPI, db, cleanup := setupProcessorTest(t)
-		defer cleanup()
+		processor, mockPublisher, _, mockAPI, db, _ := setupProcessorTest(t)
+		// No defer cleanup() here because we need to control the Stop() call manually.
+
 		repo := NewRepository(db)
 		queue := &Queue{Name: "start-nack", Status: StatusPending}
 		_ = repo.Save(context.Background(), queue)
 
-		nacked := make(chan bool, 1)
-
-		type deliveryWithSpy struct {
-			amqp091.Delivery
+		// Setup the mock acknowledger to spy on Nack calls.
+		acknowledger := &mockAcknowledger{
+			nacked: make(chan bool, 1),
 		}
-		// Patch Nack/Ack via closure (run in goroutine)
-		delivery := deliveryWithSpy{}
+
+		// Create a delivery message with our mock acknowledger.
+		delivery := amqp091.Delivery{
+			Acknowledger: acknowledger,
+			Body:         []byte("test message"),
+		}
+
 		msgCh := make(chan amqp091.Delivery, 1)
-		// Patch Nack/Ack via goroutine spy
-		go func() {
-			// Wait for a bit, then simulate Nack dipanggil
-			time.Sleep(50 * time.Millisecond)
-			nacked <- true
-		}()
-		msgCh <- delivery.Delivery
-		close(msgCh)
+		msgCh <- delivery
+
 		mockPublisher.EXPECT().Consume(
 			"queue_processing", "", false, false, false, false, mock.Anything,
 		).Return((<-chan amqp091.Delivery)(msgCh), nil).Once()
-		mockAPI.EXPECT().SimulateProcessing(mock.AnythingOfType("*main.Queue")).Return(assert.AnError).Once()
+		mockAPI.EXPECT().SimulateProcessing(mock.Anything).Return(assert.AnError).Once()
 
-		// Run Start (should Nack message)
-		go func() { processor.Start() }()
-		// Wait sebentar biar goroutine jalan
-		time.Sleep(100 * time.Millisecond)
+		// Run Start in a goroutine.
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			processor.Start()
+		}()
 
 		select {
-		case <-nacked:
-			assert.True(t, true, "message should be Nack'ed on error (spy)")
-		default:
-			assert.Fail(t, "message should be Nack'ed on error (spy)")
+		case <-acknowledger.nacked:
+			// Success: Nack was called as expected.
+		case <-time.After(2 * time.Second):
+			assert.Fail(t, "timed out waiting for Nack to be called")
 		}
+
+		// Manually stop the processor and wait for the goroutine to exit.
+		close(msgCh)
+		processor.Stop()
+		wg.Wait()
+
+		// Final assertions.
 		mockPublisher.AssertExpectations(t)
 		mockAPI.AssertExpectations(t)
 	})
@@ -456,12 +510,12 @@ func TestQueueProcessor_INTEGRATION_AllQueuesFailedThenSucceed(t *testing.T) {
 		_ = repo.Save(context.Background(), q)
 	}
 	// Step 2: Semua gagal
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		apiMock.EXPECT().SimulateProcessing(mock.Anything).Return(assert.AnError).Once()
 		_ = processor.ProcessEligibleQueue(context.Background())
 	}
 	// Step 3: Semua retry sukses
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		apiMock.EXPECT().SimulateProcessing(mock.Anything).Return(nil).Once()
 		_ = processor.ProcessEligibleQueue(context.Background())
 	}
