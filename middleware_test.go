@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -171,5 +173,71 @@ func Test_logSeverity(t *testing.T) {
 
 			assert.Equal(t, zerolog.DebugLevel, result)
 		}
+	})
+}
+
+func Test_chainMiddleware(t *testing.T) {
+	t.Run("POSITIVE-ChainMiddlewares_ExecuteInOrder", func(t *testing.T) {
+		var result []string
+		mw1 := func(h http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				result = append(result, "mw1-before")
+				h.ServeHTTP(w, r)
+				result = append(result, "mw1-after")
+			})
+		}
+		mw2 := func(h http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				result = append(result, "mw2-before")
+				h.ServeHTTP(w, r)
+				result = append(result, "mw2-after")
+			})
+		}
+		finalHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			result = append(result, "handler")
+			w.WriteHeader(http.StatusOK)
+		})
+
+		chained := chainMiddleware(finalHandler, mw1, mw2)
+		req := httptest.NewRequest("GET", "/", nil)
+		w := httptest.NewRecorder()
+		chained.ServeHTTP(w, req)
+
+		expected := []string{"mw2-before", "mw1-before", "handler", "mw1-after", "mw2-after"}
+		assert.Equal(t, expected, result)
+	})
+}
+
+func Test_logFields_MarshalZerologObject(t *testing.T) {
+	t.Run("POSITIVE-Marshal_ReturnsCorrectJSON", func(t *testing.T) {
+		fields := &logFields{
+			RemoteIP:   "1.1.1.1",
+			Host:       "example.com",
+			UserAgent:  "go-test",
+			Method:     "GET",
+			Path:       "/",
+			Body:       `{"a":1}`,
+			StatusCode: 200,
+			Latency:    123.45,
+		}
+
+		// Use zerolog's test hook to capture output
+		var buf bytes.Buffer
+		logger := zerolog.New(&buf)
+		logger.Info().EmbedObject(fields).Msg("")
+
+		var logged map[string]any
+		err := json.Unmarshal(buf.Bytes(), &logged)
+		assert.NoError(t, err)
+
+		assert.Equal(t, "1.1.1.1", logged["remote_ip"])
+		assert.Equal(t, "example.com", logged["host"])
+		assert.Equal(t, "go-test", logged["user_agent"])
+		assert.Equal(t, "GET", logged["method"])
+		assert.Equal(t, "/", logged["path"])
+		assert.Equal(t, `{"a":1}`, logged["body"])
+		// Note: zerolog marshals numbers as float64
+		assert.Equal(t, float64(200), logged["status_code"])
+		assert.Equal(t, 123.45, logged["latency"])
 	})
 }
