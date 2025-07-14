@@ -25,25 +25,6 @@ type queueResp struct {
 	Data []Queue `json:"data"`
 }
 
-// NoopPublisher implements Publisher, does nothing (for integration test without RabbitMQ)
-type NoopPublisher struct{}
-
-func (n *NoopPublisher) PublishWithContext(ctx context.Context, exchange, key string, mandatory, immediate bool, msg amqp091.Publishing) error {
-	return nil
-}
-
-func (n *NoopPublisher) Consume(queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args amqp091.Table) (<-chan amqp091.Delivery, error) {
-	ch := make(chan amqp091.Delivery)
-	close(ch)
-	return ch, nil
-}
-
-func (n *NoopPublisher) Close() error { return nil }
-
-func (n *NoopPublisher) QueueDeclare(name string, durable, autoDelete, exclusive, noWait bool, args amqp091.Table) (amqp091.Queue, error) {
-	return amqp091.Queue{Name: name}, nil
-}
-
 func openInMemorySQLiteWithGreatest() *gorm.DB {
 	rawConn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {

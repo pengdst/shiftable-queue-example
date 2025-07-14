@@ -9,18 +9,41 @@ import (
 	"testing"
 
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestLoggerHandler(t *testing.T) {
-	h := loggerHandler(nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Capture log output
+	var buf bytes.Buffer
+	originalLogger := log.Logger
+	log.Logger = zerolog.New(&buf)
+	defer func() {
+		log.Logger = originalLogger
+	}()
+
+	dummyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
-	}))
-	req := httptest.NewRequest("GET", "/", strings.NewReader(`{"foo":"bar"}`))
+	})
+
+	// Chain middlewares to ensure logger is in context
+	h := chainMiddleware(dummyHandler, loggerHandler(nil), requestIDHandler)
+
+	req := httptest.NewRequest("GET", "/test/path", strings.NewReader(`{"foo":"bar"}`))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
+
+	// Assert that the response itself is correct
 	assert.Equal(t, http.StatusOK, w.Code)
+
+	logBytes := buf.Bytes()
+	assert.True(t, json.Valid(logBytes), "Log output must be a structurally valid JSON")
+	logOutput := string(logBytes)
+	assert.Contains(t, logOutput, `"method":"GET"`)
+	assert.Contains(t, logOutput, `"path":"/test/path"`)
+	assert.Contains(t, logOutput, `"status_code":200`)
+	assert.Contains(t, logOutput, `"body":"{\"foo\":\"bar\"}"`)
 }
 
 func TestRecoverHandler(t *testing.T) {

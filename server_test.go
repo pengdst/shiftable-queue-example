@@ -39,11 +39,12 @@ func TestServer_Run_GracefulShutdown(t *testing.T) {
 	defer cleanupDB()
 
 	// We can't use the real processor because it will try to connect to RabbitMQ
-	// We use a mock/fake one instead. The NoopPublisher and FakeAPI are defined in queue_test.go
-	// but are available here because they are in the same package.
+	// We use a mock/fake one instead.
+	mockPublisher := NewMockPublisher(t)
+	mockPublisher.EXPECT().Close().Return(nil).Maybe() // Called on graceful shutdown
 	processor := &QueueProcessor{
 		repo:    NewRepository(db),
-		channel: &NoopPublisher{},
+		channel: mockPublisher,
 		api:     &FakeAPI{},
 	}
 
@@ -88,9 +89,10 @@ func TestNewServer_WithConfig(t *testing.T) {
 		// Create mock DB and processor
 		db, cleanupDB := setupTestDatabase(t)
 		defer cleanupDB()
+		mockPublisher := NewMockPublisher(t)
 		processor := &QueueProcessor{
 			repo:    NewRepository(db),
-			channel: &NoopPublisher{},
+			channel: mockPublisher,
 			api:     &FakeAPI{},
 		}
 
