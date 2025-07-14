@@ -532,3 +532,31 @@ func TestQueueProcessor_INTEGRATION_AllQueuesFailedThenSucceed(t *testing.T) {
 }
 
 // --- END: Shifting/Anti-Starvation tests ---
+
+func TestFakeAPI_SimulateProcessing(t *testing.T) {
+	t.Run("Success", func(t *testing.T) {
+		api := &FakeAPI{
+			randFloat: func() float32 {
+				return 0.6 // < 0.7, should succeed
+			},
+		}
+		err := api.SimulateProcessing(nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("Failure", func(t *testing.T) {
+		api := &FakeAPI{
+			randFloat: func() float32 {
+				return 0.8 // >= 0.7, should fail
+			},
+		}
+		err := api.SimulateProcessing(nil)
+		assert.Error(t, err)
+	})
+
+	t.Run("Default rand", func(t *testing.T) {
+		api := &FakeAPI{}
+		// We can't predict the outcome, but we can ensure it doesn't panic
+		_ = api.SimulateProcessing(nil)
+	})
+}

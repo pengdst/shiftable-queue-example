@@ -129,6 +129,43 @@ func TestRealIPHandler(t *testing.T) {
 		h.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusOK, w.Code)
 	})
+
+	t.Run("POSITIVE-WithXForwardedFor", func(t *testing.T) {
+		h := realIPHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "1.2.3.4", r.RemoteAddr)
+			w.WriteHeader(http.StatusOK)
+		}))
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("X-Forwarded-For", "1.2.3.4, 5.6.7.8")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+
+	t.Run("POSITIVE-WithTrueClientIP", func(t *testing.T) {
+		h := realIPHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "1.2.3.4", r.RemoteAddr)
+			w.WriteHeader(http.StatusOK)
+		}))
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("True-Client-IP", "1.2.3.4")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+
+	t.Run("NEGATIVE-InvalidIP", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		initialRemoteAddr := req.RemoteAddr
+		h := realIPHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, initialRemoteAddr, r.RemoteAddr)
+			w.WriteHeader(http.StatusOK)
+		}))
+		req.Header.Set("X-Real-IP", "invalid-ip")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
 }
 
 func Test_formatReqBody(t *testing.T) {
