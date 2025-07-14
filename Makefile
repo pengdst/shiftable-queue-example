@@ -16,7 +16,6 @@ help:
 tidy:
 	go fmt ./...
 	go mod tidy
-	go vet ./...
 
 # Build the application
 build:
@@ -34,6 +33,7 @@ mock: tidy
 	@echo "Generating mocks..."
 	go tool mockery
 	@echo "Mocks generated successfully"
+	go vet ./...
 
 # Alias for mock generation
 generate: mock

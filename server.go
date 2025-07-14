@@ -115,7 +115,7 @@ func (s *Server) Run(port int) error {
 	}
 
 	<-done
-		log.Info().Msg("server stopped")
+	log.Info().Msg("server stopped")
 	return nil
 }
 
