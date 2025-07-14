@@ -23,6 +23,7 @@ type RestAPI interface {
 type Publisher interface {
 	PublishWithContext(ctx context.Context, exchange, key string, mandatory, immediate bool, msg amqp091.Publishing) error
 	Consume(queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args amqp091.Table) (<-chan amqp091.Delivery, error)
+	QueueDeclare(name string, durable, autoDelete, exclusive, noWait bool, args amqp091.Table) (amqp091.Queue, error)
 	Close() error
 }
 
@@ -37,29 +38,71 @@ type QueueProcessor struct {
 	api     RestAPI
 }
 
-func NewQueueProcessor(cfg *Config, db *gorm.DB, api RestAPI) (*QueueProcessor, error) {
-	// Connect to RabbitMQ
-	conn, err := amqp091.Dial(cfg.RabbitMQURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
+// processorOptions is an unexported struct to hold optional dependencies for testing.
+type processorOptions struct {
+	conn    Closer
+	channel Publisher
+}
+
+// WithTestConnection is a public option function to inject a mock connection and channel for testing.
+func WithTestConnection(conn Closer, channel Publisher) func(*processorOptions) {
+	return func(o *processorOptions) {
+		o.conn = conn
+		o.channel = channel
+	}
+}
+
+func NewQueueProcessor(cfg *Config, db *gorm.DB, api RestAPI, opts ...func(*processorOptions)) (*QueueProcessor, error) {
+	options := &processorOptions{}
+	for _, opt := range opts {
+		opt(options)
 	}
 
-	channel, err := conn.Channel()
-	if err != nil {
-		return nil, fmt.Errorf("failed to open RabbitMQ channel: %w", err)
-	}
+	var conn Closer
+	var channel Publisher
 
-	// Declare queue
-	_, err = channel.QueueDeclare(
-		QueueProcessingName, // name
-		true,               // durable
-		false,              // delete when unused
-		false,              // exclusive
-		false,              // no-wait
-		nil,                // arguments
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to declare RabbitMQ queue: %w", err)
+	if options.conn != nil && options.channel != nil {
+		// Use provided connection and channel (for testing)
+		conn = options.conn
+		channel = options.channel
+	} else {
+		// Create real connection and channel (for production)
+		if cfg == nil {
+			return nil, errors.New("config is required for production setup")
+		}
+		realConn, err := amqp091.Dial(cfg.RabbitMQURL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
+		}
+		conn = realConn
+
+		typedConn, ok := conn.(interface {
+			Channel() (*amqp091.Channel, error)
+		})
+		if !ok {
+			return nil, errors.New("connection does not support channels")
+		}
+
+		realChannel, err := typedConn.Channel()
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("failed to open RabbitMQ channel: %w", err)
+		}
+		channel = realChannel
+
+		_, err = channel.QueueDeclare(
+			QueueProcessingName, // name
+			true,                // durable
+			false,               // delete when unused
+			false,               // exclusive
+			false,               // no-wait
+			nil,                 // arguments
+		)
+		if err != nil {
+			channel.Close()
+			conn.Close()
+			return nil, fmt.Errorf("failed to declare RabbitMQ queue: %w", err)
+		}
 	}
 
 	return &QueueProcessor{
@@ -76,12 +119,12 @@ func (p *QueueProcessor) Start() error {
 	// Start consuming messages from RabbitMQ
 	msgs, err := p.channel.Consume(
 		QueueProcessingName, // queue
-		"",                 // consumer
-		false,              // auto-ack
-		false,              // exclusive
-		false,              // no-local
-		false,              // no-wait
-		nil,                // args
+		"",                  // consumer
+		false,               // auto-ack
+		false,               // exclusive
+		false,               // no-local
+		false,               // no-wait
+		nil,                 // args
 	)
 	if err != nil {
 		return fmt.Errorf("failed to register RabbitMQ consumer: %w", err)
@@ -121,10 +164,10 @@ func (p *QueueProcessor) TriggerProcessing(ctx context.Context) error {
 
 	return p.channel.PublishWithContext(
 		ctx,
-		"",                 // exchange
+		"",                  // exchange
 		QueueProcessingName, // routing key
-		false,              // mandatory
-		false,              // immediate
+		false,               // mandatory
+		false,               // immediate
 		amqp091.Publishing{
 			ContentType: "application/json",
 			Body:        body,
@@ -199,10 +242,10 @@ func (p *QueueProcessor) triggerNextProcessing(ctx context.Context) error {
 
 	return p.channel.PublishWithContext(
 		ctx,
-		"",                 // exchange
+		"",                  // exchange
 		QueueProcessingName, // routing key
-		false,              // mandatory
-		false,              // immediate
+		false,               // mandatory
+		false,               // immediate
 		amqp091.Publishing{
 			ContentType: "application/json",
 			Body:        body,

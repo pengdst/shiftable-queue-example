@@ -42,9 +42,9 @@ func TestServer_Run_GracefulShutdown(t *testing.T) {
 	// We use a mock/fake one instead. The NoopPublisher and FakeAPI are defined in queue_test.go
 	// but are available here because they are in the same package.
 	processor := &QueueProcessor{
-		repo:	NewRepository(db),
-		channel:	&NoopPublisher{},
-		api:	&FakeAPI{},
+		repo:    NewRepository(db),
+		channel: &NoopPublisher{},
+		api:     &FakeAPI{},
 	}
 
 	server, err := NewServer(WithDB(db), WithProcessor(processor))

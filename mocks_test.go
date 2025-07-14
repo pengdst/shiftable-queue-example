@@ -339,6 +339,96 @@ func (_c *MockPublisher_PublishWithContext_Call) RunAndReturn(run func(ctx conte
 	return _c
 }
 
+// QueueDeclare provides a mock function for the type MockPublisher
+func (_mock *MockPublisher) QueueDeclare(name string, durable bool, autoDelete bool, exclusive bool, noWait bool, args amqp091.Table) (amqp091.Queue, error) {
+	ret := _mock.Called(name, durable, autoDelete, exclusive, noWait, args)
+
+	if len(ret) == 0 {
+		panic("no return value specified for QueueDeclare")
+	}
+
+	var r0 amqp091.Queue
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, bool, bool, bool, bool, amqp091.Table) (amqp091.Queue, error)); ok {
+		return returnFunc(name, durable, autoDelete, exclusive, noWait, args)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, bool, bool, bool, bool, amqp091.Table) amqp091.Queue); ok {
+		r0 = returnFunc(name, durable, autoDelete, exclusive, noWait, args)
+	} else {
+		r0 = ret.Get(0).(amqp091.Queue)
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, bool, bool, bool, bool, amqp091.Table) error); ok {
+		r1 = returnFunc(name, durable, autoDelete, exclusive, noWait, args)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockPublisher_QueueDeclare_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'QueueDeclare'
+type MockPublisher_QueueDeclare_Call struct {
+	*mock.Call
+}
+
+// QueueDeclare is a helper method to define mock.On call
+//   - name string
+//   - durable bool
+//   - autoDelete bool
+//   - exclusive bool
+//   - noWait bool
+//   - args amqp091.Table
+func (_e *MockPublisher_Expecter) QueueDeclare(name interface{}, durable interface{}, autoDelete interface{}, exclusive interface{}, noWait interface{}, args interface{}) *MockPublisher_QueueDeclare_Call {
+	return &MockPublisher_QueueDeclare_Call{Call: _e.mock.On("QueueDeclare", name, durable, autoDelete, exclusive, noWait, args)}
+}
+
+func (_c *MockPublisher_QueueDeclare_Call) Run(run func(name string, durable bool, autoDelete bool, exclusive bool, noWait bool, args amqp091.Table)) *MockPublisher_QueueDeclare_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 bool
+		if args[1] != nil {
+			arg1 = args[1].(bool)
+		}
+		var arg2 bool
+		if args[2] != nil {
+			arg2 = args[2].(bool)
+		}
+		var arg3 bool
+		if args[3] != nil {
+			arg3 = args[3].(bool)
+		}
+		var arg4 bool
+		if args[4] != nil {
+			arg4 = args[4].(bool)
+		}
+		var arg5 amqp091.Table
+		if args[5] != nil {
+			arg5 = args[5].(amqp091.Table)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+			arg4,
+			arg5,
+		)
+	})
+	return _c
+}
+
+func (_c *MockPublisher_QueueDeclare_Call) Return(queue amqp091.Queue, err error) *MockPublisher_QueueDeclare_Call {
+	_c.Call.Return(queue, err)
+	return _c
+}
+
+func (_c *MockPublisher_QueueDeclare_Call) RunAndReturn(run func(name string, durable bool, autoDelete bool, exclusive bool, noWait bool, args amqp091.Table) (amqp091.Queue, error)) *MockPublisher_QueueDeclare_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // NewMockCloser creates a new instance of MockCloser. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
 // The first argument is typically a *testing.T value.
 func NewMockCloser(t interface {

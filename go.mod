@@ -3,6 +3,7 @@ module shiftable-queue
 go 1.24.0
 
 tool github.com/vektra/mockery/v3
+
 tool github.com/wimspaargaren/go-cover-ignore
 
 require (

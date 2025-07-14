@@ -40,6 +40,10 @@ func (n *NoopPublisher) Consume(queue, consumer string, autoAck, exclusive, noLo
 
 func (n *NoopPublisher) Close() error { return nil }
 
+func (n *NoopPublisher) QueueDeclare(name string, durable, autoDelete, exclusive, noWait bool, args amqp091.Table) (amqp091.Queue, error) {
+	return amqp091.Queue{Name: name}, nil
+}
+
 func openInMemorySQLiteWithGreatest() *gorm.DB {
 	rawConn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -109,11 +113,12 @@ func setupTestServer(t *testing.T) (*httptest.Server, func()) {
 
 // Helper untuk setup test server dengan DB custom (tanpa close DB di cleanup)
 func setupTestServerWithDB(t *testing.T, db *gorm.DB) (*httptest.Server, func()) {
-	processor := &QueueProcessor{
-		repo:    NewRepository(db),
-		channel: &NoopPublisher{},
-		api:     &FakeAPI{},
-	}
+	mockCloser := NewMockCloser(t)
+	mockPublisher := NewMockPublisher(t)
+	mockPublisher.EXPECT().QueueDeclare(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(amqp091.Queue{}, nil).Maybe()
+	mockPublisher.EXPECT().PublishWithContext(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	processor, err := NewQueueProcessor(nil, db, &FakeAPI{}, WithTestConnection(mockCloser, mockPublisher))
+	assert.NoError(t, err)
 	server, err := NewServer(WithDB(db), WithProcessor(processor))
 	assert.NoError(t, err)
 	ts := httptest.NewServer(server.router)

@@ -19,12 +19,14 @@ func setupProcessorTest(t *testing.T) (*QueueProcessor, *MockPublisher, *MockClo
 	mockCloser := NewMockCloser(t)
 	mockPublisher := NewMockPublisher(t)
 	mockAPI := NewMockRestAPI(t)
-	processor := &QueueProcessor{
-		repo:    NewRepository(db),
-		conn:    mockCloser,
-		channel: mockPublisher,
-		api:     mockAPI,
-	}
+
+	processor, err := NewQueueProcessor(
+		nil, // config is not needed in this test
+		db,
+		mockAPI,
+		WithTestConnection(mockCloser, mockPublisher),
+	)
+	assert.NoError(t, err)
 
 	// Mock Close() for cleanup to prevent unexpected calls
 	mockPublisher.EXPECT().Close().Return(nil).Maybe()
@@ -220,12 +222,13 @@ func TestQueueProcessor_Stop(t *testing.T) {
 	mockCloser := NewMockCloser(t)
 	mockPublisher := NewMockPublisher(t)
 	mockAPI := NewMockRestAPI(t)
-	processor := &QueueProcessor{
-		repo:    NewRepository(db),
-		conn:    mockCloser,
-		channel: mockPublisher,
-		api:     mockAPI,
-	}
+	processor, err := NewQueueProcessor(
+		nil, // config is not needed in this test
+		db,
+		mockAPI,
+		WithTestConnection(mockCloser, mockPublisher),
+	)
+	assert.NoError(t, err)
 
 	// Set clear expectations for this specific test.
 	mockPublisher.EXPECT().Close().Return(nil).Once()
