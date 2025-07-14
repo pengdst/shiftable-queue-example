@@ -76,3 +76,29 @@ func TestServer_Run_GracefulShutdown(t *testing.T) {
 		t.Fatal("timed out waiting for server to shut down gracefully")
 	}
 }
+
+func TestNewServer_WithConfig(t *testing.T) {
+	t.Run("POSITIVE-ConfigOptionSetsServerConfig", func(t *testing.T) {
+		// Create a dummy config
+		dummyConfig := &Config{
+			Host: "test-host",
+			Port: 1234,
+		}
+
+		// Create mock DB and processor
+		db, cleanupDB := setupTestDatabase(t)
+		defer cleanupDB()
+		processor := &QueueProcessor{
+			repo:    NewRepository(db),
+			channel: &NoopPublisher{},
+			api:     &FakeAPI{},
+		}
+
+		// Create a new server with the WithConfig option, and also provide mock DB and processor
+		server, err := NewServer(WithConfig(dummyConfig), WithDB(db), WithProcessor(processor))
+		assert.NoError(t, err)
+
+		// Assert that the server's config is the dummy config
+		assert.Equal(t, dummyConfig, server.cfg)
+	})
+}

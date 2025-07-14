@@ -16,4 +16,11 @@ func TestMigrate(t *testing.T) {
 		// Check if table created
 		assert.True(t, db.Migrator().HasTable(&Queue{}))
 	})
+
+	t.Run("NEGATIVE-MigrateError", func(t *testing.T) {
+		// We expect a panic because the db is nil
+		assert.Panics(t, func() {
+			Migrate(nil)
+		})
+	})
 }

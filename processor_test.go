@@ -242,6 +242,20 @@ func TestQueueProcessor_Stop(t *testing.T) {
 	mockCloser.AssertExpectations(t)
 }
 
+func TestNewQueueProcessor_ConfigRequired(t *testing.T) {
+	t.Run("NEGATIVE-ConfigNil_ReturnsError", func(t *testing.T) {
+		db, cleanupDB := setupTestDatabase(t)
+		defer cleanupDB()
+
+		apiMock := NewMockRestAPI(t)
+
+		processor, err := NewQueueProcessor(nil, db, apiMock)
+		assert.Error(t, err)
+		assert.EqualError(t, err, "config is required for production setup")
+		assert.Nil(t, processor)
+	})
+}
+
 // mockAcknowledger implements the amqp091.Acknowledger interface for testing.
 type mockAcknowledger struct {
 	acked  chan bool

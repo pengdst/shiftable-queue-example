@@ -253,17 +253,17 @@ func (p *QueueProcessor) triggerNextProcessing(ctx context.Context) error {
 	)
 }
 
-type FakeAPI struct{
-    randFloat func() float32
+type FakeAPI struct {
+	randFloat func() float32
 }
 
 // SimulateProcessing simulates random success/failure for demo purposes
 func (p *FakeAPI) SimulateProcessing(*Queue) error {
-    // Use default if not set
-    rander := p.randFloat
-    if rander == nil {
-        rander = rand.Float32
-    }
+	// Use default if not set
+	rander := p.randFloat
+	if rander == nil {
+		rander = rand.Float32
+	}
 	if rander() < 0.7 {
 		return nil
 	}
