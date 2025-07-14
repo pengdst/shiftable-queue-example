@@ -90,8 +90,8 @@ func openInMemorySQLiteWithGreatest() *gorm.DB {
 func setupTestDatabase(t *testing.T) (*gorm.DB, func()) {
 	db := openInMemorySQLiteWithGreatest()
 	if err := Migrate(db); err != nil {
-			t.Fatalf("failed to run migrations: %v", err)
-		}
+		t.Fatalf("failed to run migrations: %v", err)
+	}
 	cleanup := func() {
 		db.Exec("DELETE FROM queues")
 		sqlDB, _ := db.DB()
@@ -104,6 +104,15 @@ func setupTestDatabase(t *testing.T) (*gorm.DB, func()) {
 
 // Minimal test factory - inject database instance to server
 func setupTestServer(t *testing.T) (*httptest.Server, func()) {
+	setEnv(t, map[string]string{
+		"DATABASE_HOST":        "localhost",
+		"DATABASE_PORT":        "5432",
+		"DATABASE_USER":        "user",
+		"DATABASE_PASSWORD":    "pass",
+		"DATABASE_NAME":        "dbname",
+		"RABBITMQ_URL":         "amqp://guest:guest@localhost:5672/",
+		"DATABASE_LOG_LEVEL":   "info",
+	})
 	db, cleanupDB := setupTestDatabase(t)
 	ts, cleanupTs := setupTestServerWithDB(t, db)
 	cleanup := func() {
@@ -115,6 +124,15 @@ func setupTestServer(t *testing.T) (*httptest.Server, func()) {
 
 // Helper untuk setup test server dengan DB custom (tanpa close DB di cleanup)
 func setupTestServerWithDB(t *testing.T, db *gorm.DB) (*httptest.Server, func()) {
+	setEnv(t, map[string]string{
+		"DATABASE_HOST":        "localhost",
+		"DATABASE_PORT":        "5432",
+		"DATABASE_USER":        "user",
+		"DATABASE_PASSWORD":    "pass",
+		"DATABASE_NAME":        "dbname",
+		"RABBITMQ_URL":         "amqp://guest:guest@localhost:5672/",
+		"DATABASE_LOG_LEVEL":   "info",
+	})
 	mockCloser := NewMockCloser(t)
 	mockPublisher := NewMockPublisher(t)
 	mockPublisher.EXPECT().QueueDeclare(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(amqp091.Queue{}, nil).Maybe()
@@ -324,6 +342,15 @@ func TestIntegration_LeaveQueue(t *testing.T) {
 	})
 
 	t.Run("NEGATIVE-TriggerProcessingError_Returns500", func(t *testing.T) {
+		setEnv(t, map[string]string{
+			"DATABASE_HOST":        "localhost",
+			"DATABASE_PORT":        "5432",
+			"DATABASE_USER":        "user",
+			"DATABASE_PASSWORD":    "pass",
+			"DATABASE_NAME":        "dbname",
+			"RABBITMQ_URL":         "amqp://guest:guest@localhost:5672/",
+			"DATABASE_LOG_LEVEL":   "info",
+		})
 		db, cleanupDB := setupTestDatabase(t)
 		defer cleanupDB()
 		// Insert queue dulu
@@ -419,7 +446,7 @@ func TestIntegration_ProcessQueue(t *testing.T) {
 		// Mock processor
 		mockProcessor := NewMockQueueTrigger(t)
 		mockProcessor.EXPECT().TriggerProcessing(mock.Anything).Return(assert.AnError).Once()
-		server, err := NewServer(WithDB(db), WithProcessor(mockProcessor))
+		server, err := NewServer(WithConfig(&Config{}), WithDB(db), WithProcessor(mockProcessor))
 		assert.NoError(t, err)
 		ts := httptest.NewServer(server.router)
 		defer ts.Close()
@@ -535,7 +562,18 @@ func TestIntegration_RabbitMQ_QueueProcessing(t *testing.T) {
 		defer rabbitCleanup()
 
 		// Setup test database
-		cfg := Load()
+		setEnv(t, map[string]string{
+			"DATABASE_HOST":        "localhost",
+			"DATABASE_PORT":        "5432",
+			"DATABASE_USER":        "user",
+			"DATABASE_PASSWORD":    "pass",
+			"DATABASE_NAME":        "dbname",
+			"RABBITMQ_URL":         "amqp://guest:guest@localhost:5672/",
+			"DATABASE_LOG_LEVEL":   "info",
+		})
+		cfg, err := Load()
+		assert.NoError(t, err)
+		assert.NotNil(t, cfg)
 		db, cleanup := setupTestDatabase(t)
 		defer cleanup()
 		// Create test data
@@ -544,7 +582,7 @@ func TestIntegration_RabbitMQ_QueueProcessing(t *testing.T) {
 			Name:   "test-eligible-queue",
 			Status: StatusPending,
 		}
-		err := repo.Save(context.Background(), testQueue)
+		err = repo.Save(context.Background(), testQueue)
 		assert.NoError(t, err)
 
 		// Publish trigger message to RabbitMQ

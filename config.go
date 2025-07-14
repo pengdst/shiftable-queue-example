@@ -7,13 +7,14 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func Load() *Config {
+func Load() (*Config, error) {
 	var c Config
 	if err := env.Parse(&c); err != nil {
-		log.Fatal().Msgf("unable to parse env: %s", err.Error())
+		log.Error().Msgf("unable to parse env: %s", err.Error())
+		return nil, fmt.Errorf("unable to parse env: %w", err)
 	}
 
-	return &c
+	return &c, nil
 }
 
 type Config struct {

@@ -47,7 +47,7 @@ func TestServer_Run_GracefulShutdown(t *testing.T) {
 		api:     &FakeAPI{},
 	}
 
-	server, err := NewServer(WithDB(db), WithProcessor(processor))
+	server, err := NewServer(WithConfig(&Config{}), WithDB(db), WithProcessor(processor))
 	assert.NoError(t, err)
 
 	// Channel to listen for the server.Run error

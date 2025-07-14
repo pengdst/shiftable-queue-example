@@ -36,7 +36,10 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 	}
 	// Fallback ke default kalau belum diinject
 	if s.cfg == nil {
-		s.cfg = Load()
+		s.cfg, err = Load()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load config: %w", err)
+		}
 	}
 	if s.db == nil {
 		s.db, err = NewGORM(s.cfg)

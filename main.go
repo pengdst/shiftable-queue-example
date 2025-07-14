@@ -15,7 +15,10 @@ func main() {
 	flag.StringVar(&command, "cmd", "server", "Command to run: server, processor")
 	flag.Parse()
 
-	cfg := Load()
+	cfg, err := Load()
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to load config")
+	}
 	db, err := NewGORM(cfg)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to create GORM instance")
