@@ -11,25 +11,27 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-func NewGORM(c *Config) *gorm.DB {
+func NewGORM(c *Config) (*gorm.DB, error) {
 	db, err := gorm.Open(postgres.Open(c.DataSourceName()), &gorm.Config{
 		Logger: NewLogLevel(c.LogLevel),
 	})
 
 	if err != nil {
-		log.Fatal().Msgf("failed to opening db conn: %s", err.Error())
+		log.Error().Msgf("failed to opening db conn: %s", err.Error())
+		return nil, err
 	}
 
 	sqlDB, err := db.DB()
 	if err != nil {
-		log.Fatal().Msgf("failed to get db object: %s", err.Error())
+		log.Error().Msgf("failed to get db object: %s", err.Error())
+		return nil, err
 	}
 
 	sqlDB.SetMaxIdleConns(10)
 	sqlDB.SetMaxOpenConns(100)
 	sqlDB.SetConnMaxLifetime(time.Hour)
 
-	return db
+	return db, nil
 }
 
 type Logger struct {

@@ -16,7 +16,10 @@ func main() {
 	flag.Parse()
 
 	cfg := Load()
-	db := NewGORM(cfg)
+	db, err := NewGORM(cfg)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to create GORM instance")
+	}
 
 	switch command {
 	case "api":

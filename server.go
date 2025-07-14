@@ -39,7 +39,10 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		s.cfg = Load()
 	}
 	if s.db == nil {
-		s.db = NewGORM(s.cfg)
+		s.db, err = NewGORM(s.cfg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create GORM instance: %w", err)
+		}
 	}
 	Migrate(s.db)
 	if s.processor == nil {

@@ -140,3 +140,19 @@ func TestLogger_Info(t *testing.T) {
 		l.Info(context.Background(), "info message")
 	})
 }
+
+func TestNewGORM(t *testing.T) {
+	t.Run("NEGATIVE-InvalidDataSourceName", func(t *testing.T) {
+		cfg := &Config{
+			Host:     "invalid",
+			Port:     1,
+			User:     "invalid",
+			Password: "invalid",
+			Name:     "invalid",
+			LogLevel: "info",
+		}
+		db, err := NewGORM(cfg)
+		assert.Error(t, err)
+		assert.Nil(t, db)
+	})
+}
