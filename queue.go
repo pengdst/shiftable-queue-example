@@ -201,15 +201,21 @@ func (h *httpHandler) LeaveQueue(w http.ResponseWriter, r *http.Request) {
 
 func WriteJSONError(w http.ResponseWriter, err error) {
 	w.Header().Set("Content-Type", "application/json")
+	// Marshal the actual error object, not just the string.
+	// This allows for richer error structures in the JSON response.
 	b, marshalErr := json.Marshal(map[string]any{
-		"error": err.Error(),
+		"error": err,
 	})
 	if marshalErr != nil {
 		log.Error().Err(marshalErr).Msg("failed to marshal JSON for error response")
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`{"error":"internal server error"}`))
+		if _, writeErr := w.Write([]byte(`{"error":"internal server error"}`)); writeErr != nil {
+			log.Error().Err(writeErr).Msg("failed to write error response")
+		}
 		return
 	}
 	w.WriteHeader(http.StatusInternalServerError)
-	w.Write(b)
+	if _, writeErr := w.Write(b); writeErr != nil {
+		log.Error().Err(writeErr).Msg("failed to write error response")
+	}
 }

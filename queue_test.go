@@ -679,6 +679,15 @@ func TestWriteJSON_ErrorHandling(t *testing.T) {
 	})
 }
 
+// Create an error that will cause a marshal error (e.g., containing a channel)
+type unmarshalableError struct {
+	Err chan int `json:"err"`
+}
+
+func (e *unmarshalableError) Error() string {
+	return "unmarshalable error"
+}
+
 func TestWriteJSONError(t *testing.T) {
 	t.Run("POSITIVE-ValidError_Returns500AndJSON", func(t *testing.T) {
 		// Create a mock HTTP response recorder
@@ -695,7 +704,65 @@ func TestWriteJSONError(t *testing.T) {
 		assert.Equal(t, "application/json", rr.Header().Get("Content-Type"))
 
 		// Verify response body
-		expectedBody := fmt.Sprintf(`{"error":"%s"}`, testError.Error())
-		assert.JSONEq(t, expectedBody, rr.Body.String())
+		b, _ := json.Marshal(map[string]any{"error": testError})
+		assert.JSONEq(t, string(b), rr.Body.String())
 	})
+
+	t.Run("NEGATIVE-MarshalError_LogsError", func(t *testing.T) {
+		// Capture log output
+		var buf bytes.Buffer
+		originalLogger := log.Logger
+		log.Logger = zerolog.New(&buf)
+		defer func() {
+			log.Logger = originalLogger
+		}()
+
+		// Use a mock writer
+		mockWriter := httptest.NewRecorder()
+
+		badErr := &unmarshalableError{Err: make(chan int)}
+
+		// Call the function under test
+		WriteJSONError(mockWriter, badErr)
+
+		// Assert that the log contains the expected error message
+		assert.Contains(t, buf.String(), "failed to marshal JSON for error response")
+	})
+
+	t.Run("NEGATIVE-WriteError_LogsError", func(t *testing.T) {
+		// Capture log output
+		var buf bytes.Buffer
+		originalLogger := log.Logger
+		log.Logger = zerolog.New(&buf)
+		defer func() {
+			log.Logger = originalLogger
+		}()
+
+		// Use the mock writer that always returns an error
+		mockWriter := &errorResponseWriter{}
+
+		// Call the function under test
+		WriteJSONError(mockWriter, fmt.Errorf("test error"))
+
+		// Assert that the log contains the expected error message
+		assert.Contains(t, buf.String(), "failed to write error response")
+	})
+}
+
+// errorResponseWriter is a mock ResponseWriter that always fails on Write.
+type errorResponseWriter struct {
+	header http.Header
+}
+
+func (w *errorResponseWriter) Header() http.Header {
+	if w.header == nil {
+		w.header = make(http.Header)
+	}
+	return w.header
+}
+
+func (w *errorResponseWriter) WriteHeader(statusCode int) {}
+
+func (w *errorResponseWriter) Write(b []byte) (int, error) {
+	return 0, fmt.Errorf("forced write error")
 }

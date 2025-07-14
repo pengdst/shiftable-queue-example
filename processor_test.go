@@ -575,6 +575,30 @@ func TestFakeAPI_SimulateProcessing(t *testing.T) {
 	})
 }
 
+func TestNewQueueProcessor_RabbitMQChannelError(t *testing.T) {
+	t.Run("NEGATIVE-RabbitMQChannelError_ReturnsError", func(t *testing.T) {
+		db, cleanupDB := setupTestDatabase(t)
+		defer cleanupDB()
+
+		apiMock := NewMockRestAPI(t)
+		mockConn := NewMockCloser(t)
+
+		// Expect Channel() to be called and return an error
+		mockConn.EXPECT().Channel().Return(nil, assert.AnError).Once()
+		// Expect Close() to be called on the connection when Channel() fails
+		mockConn.EXPECT().Close().Return(nil).Once()
+
+		processor, err := NewQueueProcessor(nil, db, apiMock, WithConnection(mockConn))
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to open RabbitMQ channel")
+		assert.Nil(t, processor)
+
+		// Assert that all expectations on the mock connection were met
+		mockConn.AssertExpectations(t)
+	})
+}
+
 func TestNewQueueProcessor_RabbitMQDialError(t *testing.T) {
 	t.Run("NEGATIVE-RabbitMQDialError_ReturnsError", func(t *testing.T) {
 		// Use a config with an invalid RabbitMQ URL to force a dial error
