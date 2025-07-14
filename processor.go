@@ -29,6 +29,7 @@ type Publisher interface {
 
 type Closer interface {
 	Close() error
+	Channel() (*amqp091.Channel, error)
 }
 
 type QueueProcessor struct {
@@ -44,10 +45,14 @@ type processorOptions struct {
 	channel Publisher
 }
 
-// WithTestConnection is a public option function to inject a mock connection and channel for testing.
-func WithTestConnection(conn Closer, channel Publisher) func(*processorOptions) {
+func WithConnection(conn Closer) func(*processorOptions) {
 	return func(o *processorOptions) {
 		o.conn = conn
+	}
+}
+
+func WithChannel(channel Publisher) func(*processorOptions) {
+	return func(o *processorOptions) {
 		o.channel = channel
 	}
 }
@@ -58,39 +63,28 @@ func NewQueueProcessor(cfg *Config, db *gorm.DB, api RestAPI, opts ...func(*proc
 		opt(options)
 	}
 
-	var conn Closer
-	var channel Publisher
-
-	if options.conn != nil && options.channel != nil {
-		// Use provided connection and channel (for testing)
-		conn = options.conn
-		channel = options.channel
-	} else {
+	if options.conn == nil {
 		// Create real connection and channel (for production)
 		if cfg == nil {
 			return nil, errors.New("config is required for production setup")
 		}
-		realConn, err := amqp091.Dial(cfg.RabbitMQURL)
+		conn, err := amqp091.Dial(cfg.RabbitMQURL)
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
 		}
-		conn = realConn
+		options.conn = conn
+	}
 
-		typedConn, ok := conn.(interface {
-			Channel() (*amqp091.Channel, error)
-		})
-		if !ok {
-			return nil, errors.New("connection does not support channels")
-		}
+	if options.channel == nil {
+		conn := options.conn
 
-		realChannel, err := typedConn.Channel()
+		chann, err := conn.Channel()
 		if err != nil {
 			conn.Close()
 			return nil, fmt.Errorf("failed to open RabbitMQ channel: %w", err)
 		}
-		channel = realChannel
 
-		_, err = channel.QueueDeclare(
+		_, err = chann.QueueDeclare(
 			QueueProcessingName, // name
 			true,                // durable
 			false,               // delete when unused
@@ -99,16 +93,17 @@ func NewQueueProcessor(cfg *Config, db *gorm.DB, api RestAPI, opts ...func(*proc
 			nil,                 // arguments
 		)
 		if err != nil {
-			channel.Close()
+			chann.Close()
 			conn.Close()
 			return nil, fmt.Errorf("failed to declare RabbitMQ queue: %w", err)
 		}
+		options.channel = chann
 	}
 
 	return &QueueProcessor{
 		repo:    NewRepository(db),
-		conn:    conn,
-		channel: channel,
+		conn:    options.conn,
+		channel: options.channel,
 		api:     api,
 	}, nil
 }

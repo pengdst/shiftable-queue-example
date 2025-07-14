@@ -456,6 +456,61 @@ func (_m *MockCloser) EXPECT() *MockCloser_Expecter {
 	return &MockCloser_Expecter{mock: &_m.Mock}
 }
 
+// Channel provides a mock function for the type MockCloser
+func (_mock *MockCloser) Channel() (*amqp091.Channel, error) {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for Channel")
+	}
+
+	var r0 *amqp091.Channel
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func() (*amqp091.Channel, error)); ok {
+		return returnFunc()
+	}
+	if returnFunc, ok := ret.Get(0).(func() *amqp091.Channel); ok {
+		r0 = returnFunc()
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*amqp091.Channel)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func() error); ok {
+		r1 = returnFunc()
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockCloser_Channel_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Channel'
+type MockCloser_Channel_Call struct {
+	*mock.Call
+}
+
+// Channel is a helper method to define mock.On call
+func (_e *MockCloser_Expecter) Channel() *MockCloser_Channel_Call {
+	return &MockCloser_Channel_Call{Call: _e.mock.On("Channel")}
+}
+
+func (_c *MockCloser_Channel_Call) Run(run func()) *MockCloser_Channel_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockCloser_Channel_Call) Return(channel *amqp091.Channel, err error) *MockCloser_Channel_Call {
+	_c.Call.Return(channel, err)
+	return _c
+}
+
+func (_c *MockCloser_Channel_Call) RunAndReturn(run func() (*amqp091.Channel, error)) *MockCloser_Channel_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Close provides a mock function for the type MockCloser
 func (_mock *MockCloser) Close() error {
 	ret := _mock.Called()

@@ -24,7 +24,7 @@ func setupProcessorTest(t *testing.T) (*QueueProcessor, *MockPublisher, *MockClo
 		nil, // config is not needed in this test
 		db,
 		mockAPI,
-		WithTestConnection(mockCloser, mockPublisher),
+		WithConnection(mockCloser), WithChannel(mockPublisher),
 	)
 	assert.NoError(t, err)
 
@@ -226,7 +226,7 @@ func TestQueueProcessor_Stop(t *testing.T) {
 		nil, // config is not needed in this test
 		db,
 		mockAPI,
-		WithTestConnection(mockCloser, mockPublisher),
+		WithConnection(mockCloser), WithChannel(mockPublisher),
 	)
 	assert.NoError(t, err)
 

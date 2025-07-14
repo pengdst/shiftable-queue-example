@@ -48,8 +48,8 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		}
 	}
 	if err := Migrate(s.db); err != nil {
-			return nil, fmt.Errorf("failed to run migrations: %w", err)
-		}
+		return nil, fmt.Errorf("failed to run migrations: %w", err)
+	}
 	if s.processor == nil {
 		s.processor, err = NewQueueProcessor(s.cfg, s.db, &FakeAPI{})
 		if err != nil {
