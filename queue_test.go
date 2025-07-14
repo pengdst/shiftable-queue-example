@@ -8,12 +8,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/mattn/go-sqlite3"
 	"github.com/rabbitmq/amqp091-go"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -656,9 +656,10 @@ func TestWriteJSON_ErrorHandling(t *testing.T) {
 
 		// Capture logs
 		var buf bytes.Buffer
-		log.Logger = log.Output(&buf)
+		originalLogger := log.Logger
+		log.Logger = zerolog.New(&buf)
 		defer func() {
-			log.Logger = log.Output(os.Stderr) // Reset log output
+			log.Logger = originalLogger // Reset log output
 		}()
 
 		// Call WriteJSON with the unmarshalable data
