@@ -89,7 +89,9 @@ func openInMemorySQLiteWithGreatest() *gorm.DB {
 
 func setupTestDatabase(t *testing.T) (*gorm.DB, func()) {
 	db := openInMemorySQLiteWithGreatest()
-	Migrate(db)
+	if err := Migrate(db); err != nil {
+			t.Fatalf("failed to run migrations: %v", err)
+		}
 	cleanup := func() {
 		db.Exec("DELETE FROM queues")
 		sqlDB, _ := db.DB()
@@ -645,5 +647,26 @@ func TestWriteJSON_ErrorHandling(t *testing.T) {
 		// Verify log output
 		assert.Contains(t, buf.String(), "failed to marshal JSON")
 		assert.Contains(t, buf.String(), "error") // Check for error level in log
+	})
+}
+
+func TestWriteJSONError(t *testing.T) {
+	t.Run("POSITIVE-ValidError_Returns500AndJSON", func(t *testing.T) {
+		// Create a mock HTTP response recorder
+		rr := httptest.NewRecorder()
+
+		// Define a test error
+		testError := fmt.Errorf("something went wrong")
+
+		// Call WriteJSONError
+		WriteJSONError(rr, testError)
+
+		// Assertions
+		assert.Equal(t, http.StatusInternalServerError, rr.Code)
+		assert.Equal(t, "application/json", rr.Header().Get("Content-Type"))
+
+		// Verify response body
+		expectedBody := fmt.Sprintf(`{"error":"%s"}`, testError.Error())
+		assert.JSONEq(t, expectedBody, rr.Body.String())
 	})
 }
