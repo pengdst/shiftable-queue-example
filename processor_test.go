@@ -574,3 +574,25 @@ func TestFakeAPI_SimulateProcessing(t *testing.T) {
 		_ = api.SimulateProcessing(nil)
 	})
 }
+
+func TestNewQueueProcessor_RabbitMQDialError(t *testing.T) {
+	t.Run("NEGATIVE-RabbitMQDialError_ReturnsError", func(t *testing.T) {
+		// Use a config with an invalid RabbitMQ URL to force a dial error
+		cfg := &Config{
+			RabbitMQURL: "amqp://invalid-host:5672/",
+			Host:        "localhost", // Dummy values for other required fields
+			Port:        5432,
+			User:        "user",
+			Password:    "pass",
+			Name:        "dbname",
+		}
+		db, cleanupDB := setupTestDatabase(t)
+		defer cleanupDB()
+		apiMock := NewMockRestAPI(t)
+
+		processor, err := NewQueueProcessor(cfg, db, apiMock)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to connect to RabbitMQ")
+		assert.Nil(t, processor)
+	})
+}

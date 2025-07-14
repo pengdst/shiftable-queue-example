@@ -439,6 +439,15 @@ func TestIntegration_ProcessQueue(t *testing.T) {
 
 	// NEGATIVE: error saat TriggerProcessing (mock processor)
 	t.Run("NEGATIVE-TriggerProcessingError_Returns500", func(t *testing.T) {
+		setEnv(t, map[string]string{
+			"DATABASE_HOST":        "localhost",
+			"DATABASE_PORT":        "5432",
+			"DATABASE_USER":        "user",
+			"DATABASE_PASSWORD":    "pass",
+			"DATABASE_NAME":        "dbname",
+			"RABBITMQ_URL":         "amqp://guest:guest@localhost:5672/",
+			"DATABASE_LOG_LEVEL":   "info",
+		})
 		db, cleanupDB := setupTestDatabase(t)
 		defer cleanupDB()
 		// Insert queue dulu
@@ -446,7 +455,7 @@ func TestIntegration_ProcessQueue(t *testing.T) {
 		// Mock processor
 		mockProcessor := NewMockQueueTrigger(t)
 		mockProcessor.EXPECT().TriggerProcessing(mock.Anything).Return(assert.AnError).Once()
-		server, err := NewServer(WithConfig(&Config{}), WithDB(db), WithProcessor(mockProcessor))
+		server, err := NewServer(WithDB(db), WithProcessor(mockProcessor))
 		assert.NoError(t, err)
 		ts := httptest.NewServer(server.router)
 		defer ts.Close()
