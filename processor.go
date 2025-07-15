@@ -14,6 +14,8 @@ import (
 	"gorm.io/gorm"
 )
 
+var jsonMarshal = json.Marshal
+
 const QueueProcessingName = "queue_processing"
 
 type RestAPI interface {
@@ -152,7 +154,7 @@ func (p *QueueProcessor) Stop() {
 
 func (p *QueueProcessor) TriggerProcessing(ctx context.Context) error {
 	message := map[string]string{"trigger": TriggerStartProcessing}
-	body, err := json.Marshal(message)
+	body, err := jsonMarshal(message)
 	if err != nil {
 		return err
 	}
@@ -230,7 +232,7 @@ func (p *QueueProcessor) ProcessEligibleQueue(ctx context.Context) error {
 
 func (p *QueueProcessor) triggerNextProcessing(ctx context.Context) error {
 	message := map[string]string{"trigger": TriggerProcessNext}
-	body, err := json.Marshal(message)
+	body, err := jsonMarshal(message)
 	if err != nil {
 		return err
 	}

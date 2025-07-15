@@ -124,11 +124,15 @@ func WriteJSON(w http.ResponseWriter, status int, data any) {
 	if err != nil {
 		log.Error().Err(err).Msg("failed to marshal JSON")
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`{"error":"internal server error"}`))
+		if _, writeErr := w.Write([]byte(`{"error":"internal server error"}`)); writeErr != nil {
+			log.Error().Err(writeErr).Msg("failed to write error response")
+		}
 		return
 	}
 	w.WriteHeader(status)
-	w.Write(b)
+	if _, writeErr := w.Write(b); writeErr != nil {
+		log.Error().Err(writeErr).Msg("failed to write error response")
+	}
 }
 
 func (h *httpHandler) ProcessQueue(w http.ResponseWriter, r *http.Request) {

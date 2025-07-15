@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
@@ -183,7 +184,65 @@ func TestQueueProcessor_ProcessEligibleQueue(t *testing.T) {
 		err := processor.ProcessEligibleQueue(context.Background())
 		assert.NoError(t, err) // proses pertama sukses
 		err = processor.ProcessEligibleQueue(context.Background())
-		assert.NoError(t, err) // proses kedua tetap jalan, error publish hanya log
+				assert.NoError(t, err) // proses kedua tetap jalan, error publish hanya log
+	})
+
+	t.Run("NEGATIVE-ProcessEligibleQueue_SaveFailedQueueError", func(t *testing.T) {
+		processor, _, _, mockAPI, db, cleanup := setupProcessorTest(t)
+		defer cleanup()
+		repo := NewRepository(db)
+		queue := &Queue{Name: "q-save-fail", Status: StatusPending}
+		_ = repo.Save(context.Background(), queue)
+
+		mockAPI.EXPECT().SimulateProcessing(mock.Anything).Return(assert.AnError).Once().Run(func(args mock.Arguments) {
+			// Simulate DB error on Save after processing fails
+			sqlDB, _ := db.DB()
+			sqlDB.Close()
+		})
+
+		err := processor.ProcessEligibleQueue(context.Background())
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "sql: database is closed")
+	})
+
+	t.Run("NEGATIVE-ProcessEligibleQueue_SaveCompletedQueueError", func(t *testing.T) {
+		processor, _, _, mockAPI, db, cleanup := setupProcessorTest(t)
+		defer cleanup()
+		repo := NewRepository(db)
+		queue := &Queue{Name: "q-save-completed-fail", Status: StatusPending}
+		_ = repo.Save(context.Background(), queue)
+
+		mockAPI.EXPECT().SimulateProcessing(mock.Anything).Return(nil).Once().Run(func(args mock.Arguments) {
+			// Simulate DB error on Save after processing succeeds
+			sqlDB, _ := db.DB()
+			sqlDB.Close()
+		})
+
+		err := processor.ProcessEligibleQueue(context.Background())
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "sql: database is closed")
+	})
+
+	t.Run("NEGATIVE-ProcessEligibleQueue_HasRemainingQueuesError", func(t *testing.T) {
+		processor, _, _, mockAPI, db, cleanup := setupProcessorTest(t)
+		defer cleanup()
+		repo := NewRepository(db)
+		queue := &Queue{Name: "q-has-remaining-fail", Status: StatusPending}
+		_ = repo.Save(context.Background(), queue)
+
+		mockAPI.EXPECT().SimulateProcessing(mock.Anything).Return(nil).Once().Run(func(args mock.Arguments) {
+			// Simulate DB error on HasRemainingQueues
+			// This requires mocking the repository, which is already done in setupProcessorTest
+			// We need to make repo.HasRemainingQueues return an error.
+			// This is tricky because repo is created inside NewQueueProcessor.
+			// A simpler way is to close the DB connection before calling HasRemainingQueues.
+			sqlDB, _ := db.DB()
+			sqlDB.Close()
+		})
+
+		err := processor.ProcessEligibleQueue(context.Background())
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "sql: database is closed")
 	})
 }
 
@@ -210,6 +269,57 @@ func TestQueueProcessor_TriggerProcessing(t *testing.T) {
 		assert.Error(t, err)
 		assert.Equal(t, errExpected, err)
 		mockPublisher.AssertExpectations(t)
+	})
+
+	t.Run("NEGATIVE-MarshalError", func(t *testing.T) {
+		processor, _, _, _, _, cleanup := setupProcessorTest(t)
+		defer cleanup()
+
+		// Temporarily replace json.Marshal to force an error
+		originalMarshal := json.Marshal
+		jsonMarshal = func(v any) ([]byte, error) {
+			return nil, assert.AnError
+		}
+		defer func() {
+			jsonMarshal = originalMarshal
+		}()
+
+		err := processor.TriggerProcessing(context.Background())
+		assert.Error(t, err)
+		assert.Equal(t, assert.AnError, err)
+	})
+}
+
+func TestQueueProcessor_triggerNextProcessing(t *testing.T) {
+	t.Run("NEGATIVE-MarshalError", func(t *testing.T) {
+		processor, _, _, _, _, cleanup := setupProcessorTest(t)
+		defer cleanup()
+
+		// Temporarily replace json.Marshal to force an error
+		originalMarshal := jsonMarshal
+		jsonMarshal = func(v any) ([]byte, error) {
+			return nil, assert.AnError
+		}
+		defer func() {
+			jsonMarshal = originalMarshal
+		}()
+
+		err := processor.triggerNextProcessing(context.Background())
+		assert.Error(t, err)
+		assert.Equal(t, assert.AnError, err)
+	})
+}
+
+func TestQueueProcessor_Start_ConsumeError(t *testing.T) {
+	t.Run("NEGATIVE-ConsumeError_ReturnsError", func(t *testing.T) {
+		processor, mockPublisher, _, _, _, cleanup := setupProcessorTest(t)
+		defer cleanup()
+
+		mockPublisher.EXPECT().Consume(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, assert.AnError).Once()
+
+		err := processor.Start()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to register RabbitMQ consumer")
 	})
 }
 

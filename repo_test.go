@@ -210,4 +210,17 @@ func TestRepo_HasRemainingQueues(t *testing.T) {
 		assert.NoError(t, err)
 		assert.False(t, exists)
 	})
+
+	t.Run("NEGATIVE-DBError_ReturnsError", func(t *testing.T) {
+		db, shutdown := setupTestDatabase(t)
+		defer shutdown()
+
+		repo := NewRepository(db)
+		sqlDB, _ := db.DB()
+		sqlDB.Close()
+
+		exists, err := repo.HasRemainingQueues(context.Background())
+		assert.Error(t, err)
+		assert.False(t, exists)
+	})
 }

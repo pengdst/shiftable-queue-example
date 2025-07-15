@@ -677,6 +677,25 @@ func TestWriteJSON_ErrorHandling(t *testing.T) {
 		assert.Contains(t, buf.String(), "failed to marshal JSON")
 		assert.Contains(t, buf.String(), "error") // Check for error level in log
 	})
+
+	t.Run("NEGATIVE-WriteError_LogsError", func(t *testing.T) {
+		// Capture log output
+		var buf bytes.Buffer
+		originalLogger := log.Logger
+		log.Logger = zerolog.New(&buf)
+		defer func() {
+			log.Logger = originalLogger
+		}()
+
+		// Use the mock writer that always returns an error
+		mockWriter := &errorResponseWriter{}
+
+		// Call the function under test
+		WriteJSON(mockWriter, http.StatusOK, nil)
+
+		// Assert that the log contains the expected error message
+		assert.Contains(t, buf.String(), "failed to write error response")
+	})
 }
 
 // Create an error that will cause a marshal error (e.g., containing a channel)
